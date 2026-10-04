@@ -1,0 +1,9 @@
+services:
+  bot:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_PATH: /app/data/shop.db
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
