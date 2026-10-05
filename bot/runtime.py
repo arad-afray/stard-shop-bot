@@ -83,12 +83,22 @@ class Supervisor:
     def __init__(self, on_alert: Callable[[str, str], Awaitable[None]] | None = None):
         self.on_alert = on_alert
         self.tasks: dict[str, asyncio.Task] = {}
+        self.factories: dict[str, Callable[[], Awaitable[None]]] = {}
         self.crashes: dict[str, list[float]] = {}
         self.restarts: dict[str, int] = {}
         self.status: dict[str, str] = {}
 
     def start(self, name: str, factory: Callable[[], Awaitable[None]]) -> None:
+        self.factories[name] = factory
         self.tasks[name] = asyncio.create_task(self._loop(name, factory), name=f"sup:{name}")
+
+    def restart(self, name: str) -> None:
+        """Restart یک سرویس گیرکرده (watchdog یا دکمه‌ی پنل)."""
+        task = self.tasks.get(name)
+        if task is not None:
+            task.cancel()
+        self.restarts[name] = self.restarts.get(name, 0) + 1
+        self.tasks[name] = asyncio.create_task(self._loop(name, self.factories[name]), name=f"sup:{name}")
 
     async def _loop(self, name: str, factory: Callable[[], Awaitable[None]]) -> None:
         delay = 1.0

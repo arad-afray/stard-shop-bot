@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import signal
 import sys
 
@@ -22,6 +23,8 @@ from aiogram.types import BotCommand
 
 from . import __version__, monitor  # noqa: F401 — monitor کار دوره‌ای هشدار را ثبت می‌کند
 from .app import setup
+from .backups import BackupManager
+from .updater import Updater, finish_pending_update
 from .db import now_ms
 from .http_server import start_http
 from .metrics import Metrics
@@ -87,7 +90,14 @@ async def main() -> int:
         await notify.to_admins(bot, admins, f"🚨 <b>هشدار</b>\n{text}")
 
     sup = Supervisor(on_alert=alert)
-    services.extra["supervisor"] = sup
+    backups = BackupManager(services.db, settings.backup_dir, settings, services.locks)
+    data_dir = os.path.dirname(os.path.abspath(settings.database_path))
+    updater = Updater(settings, services.db, backups, services.locks, data_dir=data_dir)
+    services.extra.update(supervisor=sup, backups=backups, updater=updater)
+    try:
+        await finish_pending_update(services.db, bot, admins, data_dir)
+    except Exception:
+        log.exception("post-update verification failed")
     worker = scheduler = None
     if settings.role in ("all", "worker"):
         worker = JobWorker(ctx, concurrency=settings.worker_concurrency)
@@ -98,6 +108,7 @@ async def main() -> int:
     roles = [r for r in ("bot", "worker", "scheduler") if settings.role == "all" or settings.role == r
              or (settings.role == "worker" and r == "scheduler")]
     sup.start("heartbeat", lambda: monitor.heartbeat_loop(ctx, roles, now_ms()))
+    sup.start("watchdog", lambda: _watchdog(sup, worker, scheduler))
     http = await start_http(services)
 
     stop = asyncio.Event()
@@ -122,6 +133,12 @@ async def main() -> int:
                                                            handle_signals=False, close_bot_session=False))
             waiters = [polling, asyncio.create_task(stop.wait())]
             await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+            if polling.done() and not stop.is_set():
+                # polling بدون درخواست توقف تمام شد (خطای شبکه‌ی دائمی، توکن نامعتبر، …): کد خروج غیرصفر
+                # تا run.ps1/run.sh/Docker پردازه را دوباره اجرا کنند
+                exc = polling.exception() if not polling.cancelled() else None
+                log.error("polling stopped unexpectedly: %s", type(exc).__name__ if exc else "no error")
+                exit_code["code"] = 1
         else:
             await stop.wait()
     except (KeyboardInterrupt, asyncio.CancelledError):
@@ -143,6 +160,17 @@ async def main() -> int:
     return exit_code["code"]
 
 
+async def _watchdog(sup: Supervisor, worker, scheduler) -> None:
+    """اگر حلقه‌ی worker یا زمان‌بند گیر کند (نه کرش)، آن را Restart می‌کند."""
+    import time
+    while True:
+        await asyncio.sleep(60)
+        for name, svc in (("worker", worker), ("scheduler", scheduler)):
+            if svc is not None and time.monotonic() - svc.last_loop > 300 and name in sup.tasks:
+                log.error("%s loop stalled for %.0fs — restarting", name, time.monotonic() - svc.last_loop)
+                sup.restart(name)
+
+
 def run() -> None:
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -150,6 +178,10 @@ def run() -> None:
         code = asyncio.run(main())
     except KeyboardInterrupt:
         code = 0
+    if code == RESTART_EXIT_CODE and os.environ.get("STARD_SUPERVISED") != "1":
+        # بدون run.ps1/run.sh/Docker: خود پردازه را با کد جدید دوباره اجرا می‌کنیم
+        logging.shutdown()
+        os.execv(sys.executable, [sys.executable, "-m", "bot"])
     sys.exit(code)
 
 

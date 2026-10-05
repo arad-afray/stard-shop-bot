@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import os
-import tempfile
 from html import escape
 from typing import Any
 
@@ -20,6 +18,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from .. import __version__, notify
 from ..admins import Admins
+from ..backups import BackupError, BackupManager
 from ..config import Settings
 from ..db import Database, InsufficientBalance
 from ..middlewares import JoinChecker
@@ -967,20 +966,22 @@ async def setting_value(message: Message, state: FSMContext, db: Database, bot: 
 
 # ---------- پشتیبان ----------
 @router.callback_query(Adm.filter(F.name == "backup"))
-async def cb_backup(cb: CallbackQuery, db: Database, bot: Bot):
+async def cb_backup(cb: CallbackQuery, db: Database, bot: Bot, settings: Settings, locks=None,
+                    backups: BackupManager | None = None):
     await cb.answer("⏳ در حال ساخت پشتیبان…")
-    fd, path = tempfile.mkstemp(suffix=".db", prefix="shop-backup-")
-    os.close(fd)
+    mgr = backups or BackupManager(db, settings.backup_dir, settings, locks)
     try:
-        await db.backup(path)
-        await bot.send_document(cb.from_user.id, FSInputFile(path, filename="shop-backup.db"),
-                                caption="💾 پشتیبان کامل پایگاه داده. این فایل را جای امن نگه دارید.")
+        info = await mgr.create("manual", admin_id=cb.from_user.id)
+        check = mgr.verify(info.name)
+        await bot.send_document(cb.from_user.id, FSInputFile(info.path, filename=info.name),
+                                caption=f"💾 پشتیبان کامل ({info.rows:,} ردیف) — "
+                                        f"{'✅ سالم' if check['ok'] else '❌ ' + escape(check['error'] or '')}\n"
+                                        "این فایل را جای امن نگه دارید. secretها در پشتیبان نیستند.")
+    except BackupError as e:
+        await cb.message.answer(f"❗️ {escape(str(e))}")
     except Exception as e:
         log.exception("backup failed")
-        await cb.message.answer(f"❗️ پشتیبان‌گیری ناموفق: {escape(str(e))[:200]}")
-    finally:
-        with contextlib.suppress(OSError):
-            os.remove(path)
+        await cb.message.answer(f"❗️ پشتیبان‌گیری ناموفق: {escape(type(e).__name__)}")
 
 
 # ---------- مدیرها (فقط مالک) ----------
