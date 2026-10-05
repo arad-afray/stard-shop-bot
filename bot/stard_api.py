@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 import httpx
@@ -54,6 +55,18 @@ class StardClient:
             transport=transport,
         )
         self.max_retries = max_retries
+        # observer(method, path, status, seconds, headers, code): برای متریک‌ها و صفحه‌ی عیب‌یابی API
+        self.observer = None
+        self.last_error: tuple[float, str] | None = None
+
+    def _observe(self, method: str, path: str, status: int, seconds: float, headers=None, code=None) -> None:
+        if status == 0 or status >= 400:
+            self.last_error = (time.time(), f"{status} {code or ''}".strip())
+        if self.observer is not None:
+            try:
+                self.observer(method, path, status, seconds, headers, code)
+            except Exception:  # متریک هرگز نباید درخواست را خراب کند
+                log.debug("observer failed", exc_info=True)
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -67,9 +80,11 @@ class StardClient:
         can_retry = method == "GET" or idempotency_key is not None
         delay = 1.0
         for attempt in range(self.max_retries + 1):
+            t0 = time.perf_counter()
             try:
                 r = await self._client.request(method, path, params=params, json=json, headers=headers)
             except httpx.TransportError as e:
+                self._observe(method, path, 0, time.perf_counter() - t0, code=type(e).__name__)
                 if not can_retry or attempt == self.max_retries:
                     raise StardError(0, "network_error", f"خطای شبکه: {e}") from e
                 await _sleep(delay)
@@ -77,9 +92,11 @@ class StardClient:
                 continue
 
             if r.status_code < 400:
+                self._observe(method, path, r.status_code, time.perf_counter() - t0, r.headers)
                 return r.json() if r.content else None
 
             err = _parse_error(r)
+            self._observe(method, path, r.status_code, time.perf_counter() - t0, r.headers, err.code)
             if can_retry and err.retryable and attempt < self.max_retries:
                 wait = delay
                 if r.status_code == 429:
@@ -100,6 +117,14 @@ class StardClient:
 
     async def status(self) -> dict:
         return await self._request("GET", "/status")
+
+    async def openapi_version(self) -> str | None:
+        """نسخه‌ی API از /openapi.json (بدون احراز هویت)."""
+        try:
+            r = await self._client.get("/openapi.json")
+            return (r.json().get("info") or {}).get("version") if r.status_code == 200 else None
+        except (httpx.HTTPError, ValueError):
+            return None
 
     # ---------- محصولات و قیمت ----------
     async def categories(self) -> list[dict]:

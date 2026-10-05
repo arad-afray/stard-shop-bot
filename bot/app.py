@@ -24,6 +24,9 @@ class CorrelationMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         upd = data.get("event_update")
         token = correlation_id.set(f"u{upd.update_id}" if upd is not None else "u-")
+        m = data.get("metrics")
+        if m is not None:
+            m.inc("telegram_updates_total")
         try:
             return await handler(event, data)
         finally:

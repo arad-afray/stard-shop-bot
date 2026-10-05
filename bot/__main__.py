@@ -20,8 +20,11 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand
 
-from . import __version__
+from . import __version__, monitor  # noqa: F401 — monitor کار دوره‌ای هشدار را ثبت می‌کند
 from .app import setup
+from .db import now_ms
+from .http_server import start_http
+from .metrics import Metrics
 from .config import get_settings
 from .logging_setup import service_name, setup_logging
 from .runtime import Services, Supervisor, build_services
@@ -61,6 +64,9 @@ async def main() -> int:
     log.info("stard-shop-bot v%s starting (role=%s, instance=%s)", __version__, settings.role, settings.instance_id)
 
     services = await build_services(settings)
+    metrics = Metrics()
+    services.api.observer = metrics.observe_api
+    services.extra.update(metrics=metrics, redis=services.redis)
     log.info("database: %s | redis: %s", services.db.dialect, "on" if services.redis is not None else "off")
     try:
         ping = await services.api.ping()
@@ -89,6 +95,10 @@ async def main() -> int:
         services.extra.update(worker=worker, scheduler=scheduler)
         sup.start("worker", worker.run)
         sup.start("scheduler", scheduler.run)
+    roles = [r for r in ("bot", "worker", "scheduler") if settings.role == "all" or settings.role == r
+             or (settings.role == "worker" and r == "scheduler")]
+    sup.start("heartbeat", lambda: monitor.heartbeat_loop(ctx, roles, now_ms()))
+    http = await start_http(services)
 
     stop = asyncio.Event()
     exit_code = {"code": 0}
@@ -126,6 +136,8 @@ async def main() -> int:
         if scheduler is not None:
             scheduler.stop()
         await sup.stop()
+        if http is not None:
+            await http.cleanup()
         await services.close()
         await bot.session.close()
     return exit_code["code"]
