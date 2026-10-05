@@ -9,14 +9,25 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import BotCommand
 
+from . import __version__
+from .app import setup
 from .config import get_settings
 from .db import Database
-from .handlers import admin, shop as shop_handlers, topup, user
-from .middlewares import UserMiddleware
 from .shop import Shop
 from .stard_api import StardClient, StardError
 from .worker import order_worker
+
+COMMANDS = [
+    BotCommand(command="start", description="منوی اصلی"),
+    BotCommand(command="shop", description="فروشگاه"),
+    BotCommand(command="price", description="قیمت لحظه‌ای دلار، TON و استارز"),
+    BotCommand(command="orders", description="سفارش‌های من"),
+    BotCommand(command="me", description="حساب کاربری"),
+    BotCommand(command="invite", description="دعوت دوستان"),
+    BotCommand(command="cancel", description="انصراف"),
+]
 
 
 async def main() -> None:
@@ -24,6 +35,7 @@ async def main() -> None:
     logging.basicConfig(level=settings.log_level,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     log = logging.getLogger("bot")
+    log.info("stard-shop-bot v%s", __version__)
 
     db = Database(settings.database_path)
     await db.connect()
@@ -38,16 +50,13 @@ async def main() -> None:
 
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher(storage=MemoryStorage())
-    mw = UserMiddleware(db, settings.admin_ids)
-    dp.message.outer_middleware(mw)
-    dp.callback_query.outer_middleware(mw)
-    # ترتیب مهم است: انصراف و منوی اصلی قبل از فرم‌های چندمرحله‌ای
-    dp.include_routers(user.router, admin.router, topup.router, shop_handlers.router)
-    dp.workflow_data.update(db=db, shop=shop, settings=settings, admin_ids=settings.admin_ids)
+    await setup(dp, db=db, shop=shop, settings=settings)
 
     worker = asyncio.create_task(order_worker(shop, bot, settings.poll_interval_seconds))
     try:
         await bot.delete_webhook(drop_pending_updates=False)
+        with contextlib.suppress(Exception):
+            await bot.set_my_commands(COMMANDS)
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
         worker.cancel()

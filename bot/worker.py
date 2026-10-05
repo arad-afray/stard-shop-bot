@@ -1,36 +1,26 @@
-"""کار پس‌زمینه: پیگیری خودکار سفارش‌ها و اطلاع‌رسانی به کاربر."""
+"""کار پس‌زمینه: پیگیری خودکار سفارش‌ها، اطلاع‌رسانی به کاربر و پرداخت پاداش معرف."""
 from __future__ import annotations
 
 import asyncio
 import logging
-from html import escape
 
 from aiogram import Bot
 
-from .db import Database
-from .pricing import fmt_toman
+from . import notify
 from .shop import Shop
 from .stard_api import StardError
-from .ui import STATUS_LABEL
 
 log = logging.getLogger(__name__)
 
 
-async def notify_change(bot: Bot, db: Database, oid: int) -> None:
-    o = await db.get_order(oid)
-    if o is None:
-        return
-    text = (f"📦 <b>سفارش #{o['id']}</b>\n{escape(o['title'])} → {escape(o['recipient'] or '')}\n\n"
-            f"وضعیت: <b>{STATUS_LABEL.get(o['status'], o['status'])}</b>")
-    if o["status"] == "completed":
-        text += "\n\n🎉 تحویل داده شد. از خرید شما ممنونیم!"
-    elif o["refunded"]:
-        u = await db.get_user(o["user_id"])
-        text += f"\n\n💰 مبلغ {fmt_toman(o['price'])} به کیف پول شما برگشت.\nموجودی: <b>{fmt_toman(u.balance)}</b>"
-    try:
-        await bot.send_message(o["user_id"], text)
-    except Exception as e:
-        log.warning("notify %s failed: %s", o["user_id"], e)
+async def on_status_change(bot: Bot, shop: Shop, oid: int) -> None:
+    """بعد از هر تغییر وضعیت: خبر به کاربر و کانال گزارش، و اگر انجام شد پاداش معرف."""
+    await notify.order_changed(bot, shop.db, oid)
+    o = await shop.db.get_order(oid)
+    if o is not None and o["status"] == "completed":
+        paid = await shop.after_complete(oid)
+        if paid:
+            await notify.referral_paid(bot, shop.db, *paid)
 
 
 async def sync_once(shop: Shop, bot: Bot) -> int:
@@ -48,7 +38,7 @@ async def sync_once(shop: Shop, bot: Bot) -> int:
             changed += 1
             old, new = change
             log.info("order %s: %s -> %s", o["id"], old, new)
-            await notify_change(bot, shop.db, o["id"])
+            await on_status_change(bot, shop, o["id"])
         await asyncio.sleep(0.3)  # فاصله برای ماندن زیر سقف ۶۰ درخواست در دقیقه
     return changed
 

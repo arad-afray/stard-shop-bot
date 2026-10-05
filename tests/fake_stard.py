@@ -15,6 +15,7 @@ class FakeStard:
     def __init__(self):
         self.balance = 100_000_000
         self.unit = 4382
+        self.boost_unit = 13200
         self.orders: dict[str, dict] = {}
         self.idem: dict[str, dict] = {}
         self.calls: list[tuple[str, str]] = []
@@ -64,8 +65,64 @@ class FakeStard:
             if pid not in self.products:
                 return err(404, "product_not_found")
             return httpx.Response(200, json=self.products[pid])
+        if path == "/prices":
+            return httpx.Response(200, json={"object": "prices", "currency": "IRT",
+                                             "star": {"amount": self.unit, "unit": "1 star"},
+                                             "ton": {"amount": 385770, "usd": 1.4976}, "usd": {"amount": 256300},
+                                             "updated_at": "2026-10-01T10:31:48Z"})
+        if path == "/boosts":
+            return httpx.Response(200, json={"object": "boost_catalog", "enabled": True, "currency": "IRT",
+                                             "max_quantity": 1000, "durations": [
+                                                 {"duration": 7, "label": "۷ روزه", "price_per_boost": self.boost_unit,
+                                                  "available": True},
+                                                 {"duration": 14, "label": "۱۴ روزه", "price_per_boost": None,
+                                                  "available": False}]})
+        if path == "/boosts/orders" and req.method == "POST":
+            key = req.headers.get("idempotency-key")
+            if key in self.idem:
+                return httpx.Response(201, json=self.idem[key])
+            if not str(body.get("recipient", "")).startswith("@"):
+                return err(400, "recipient_invalid")
+            amount = body["quantity"] * self.boost_unit
+            if body.get("quote_id") and body["quote_id"] != f"qt_{amount}":
+                return err(409, "price_changed")
+            if amount > self.balance:
+                return err(402, "insufficient_funds")
+            self.balance -= amount
+            oid = f"ord_test_{len(self.orders) + 1}"
+            order = {"object": "order", "id": oid, "status": "pending", "type": "boost", "quantity": body["quantity"],
+                     "duration": body["duration"], "recipient": body["recipient"],
+                     "amount": {"amount": amount, "currency": "IRT"}, "failure_reason": None,
+                     "metadata": body.get("metadata", {})}
+            self.orders[oid] = order
+            self.idem[key] = order
+            return httpx.Response(201, json=order)
+        if path.startswith("/boosts/orders/") and req.method == "GET":
+            ref = path.split("/")[3]
+            if ref not in self.orders:
+                return err(404, "order_not_found")
+            return httpx.Response(200, json=self.orders[ref])
+        if path.startswith("/orders/") and path.endswith("/cancel"):
+            ref = path.split("/")[2]
+            o = self.orders.get(ref)
+            if o is None:
+                return err(404, "order_not_found")
+            if o["status"] != "pending":
+                return err(409, "order_not_cancellable")
+            o["status"] = "cancelled"
+            self.balance += o["amount"]["amount"]
+            return httpx.Response(200, json=o)
+        if path == "/status":
+            return httpx.Response(200, json={"object": "status", "status": "operational",
+                                             "services": {"api": "operational"}})
+        if path == "/transactions":
+            return httpx.Response(200, json={"object": "list", "data": []})
         if path == "/orders/quote":
-            if body["type"] == "stars":
+            if body["type"] == "boost":
+                if body.get("duration") != 7:
+                    return err(409, "boost_unavailable")
+                amount = body["quantity"] * self.boost_unit
+            elif body["type"] == "stars":
                 if body["quantity"] < 50:
                     return err(400, "parameter_invalid")
                 amount = body["quantity"] * self.unit

@@ -14,6 +14,8 @@ from typing import Any
 
 import httpx
 
+from . import __version__
+
 log = logging.getLogger(__name__)
 
 # وضعیت‌های نهایی سفارش طبق مستندات /docs/orders
@@ -46,7 +48,7 @@ class StardClient:
                  transport: httpx.AsyncBaseTransport | None = None):
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
-            headers={"Authorization": f"Bearer {api_key}", "User-Agent": "stard-shop-bot/1.0"},
+            headers={"Authorization": f"Bearer {api_key}", "User-Agent": f"stard-shop-bot/{__version__}"},
             timeout=timeout,
             transport=transport,
         )
@@ -128,11 +130,35 @@ class StardClient:
     async def gifts(self) -> list[dict]:
         return (await self._request("GET", "/gifts"))["data"]
 
-    async def quote(self, type_: str, *, quantity: int = 1, product_id: int | None = None) -> dict:
+    async def quote(self, type_: str, *, quantity: int = 1, product_id: int | None = None,
+                    duration: int | None = None) -> dict:
+        """type_: stars | product | boost"""
         body: dict[str, Any] = {"type": type_, "quantity": quantity}
         if product_id is not None:
             body["product_id"] = product_id
+        if duration is not None:
+            body["duration"] = duration
         return await self._request("POST", "/orders/quote", json=body)
+
+    # ---------- بوست کانال ----------
+    async def boosts(self) -> dict:
+        """کاتالوگ بوست: {"enabled", "max_quantity", "durations": [{"duration","label","price_per_boost","available"}]}"""
+        return await self._request("GET", "/boosts")
+
+    async def boost_price(self, quantity: int, duration: int) -> dict:
+        return await self._request("GET", "/boosts/price", params={"quantity": quantity, "duration": duration})
+
+    async def create_boost_order(self, *, idempotency_key: str, recipient: str, quantity: int, duration: int,
+                                 quote_id: str | None = None, pay_currency: str | None = None,
+                                 metadata: dict | None = None) -> dict:
+        body: dict[str, Any] = {"recipient": recipient, "quantity": quantity, "duration": duration}
+        for k, v in (("quote_id", quote_id), ("pay_currency", pay_currency), ("metadata", metadata)):
+            if v is not None:
+                body[k] = v
+        return await self._request("POST", "/boosts/orders", json=body, idempotency_key=idempotency_key)
+
+    async def get_boost_order(self, ref: str) -> dict:
+        return await self._request("GET", f"/boosts/orders/{ref}")
 
     # ---------- سفارش ----------
     async def create_order(self, *, idempotency_key: str, type_: str = "product",

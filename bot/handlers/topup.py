@@ -9,8 +9,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message
 
+from ..admins import Admins
 from ..db import Database, User
-from ..pricing import fmt_toman
+from ..pricing import fmt_toman, to_int
 from ..ui import BTN_TOPUP, cancel_menu, main_menu, topup_review_menu
 
 log = logging.getLogger(__name__)
@@ -18,12 +19,16 @@ router = Router(name="topup")
 
 DEFAULT_MIN_TOPUP = 10_000
 MAX_TOPUP = 500_000_000
-PERSIAN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
 
 
 class Topup(StatesGroup):
     amount = State()
     receipt = State()
+
+
+async def _min_topup(db: Database) -> int:
+    v = to_int(await db.get_setting("min_topup"))
+    return v if v else DEFAULT_MIN_TOPUP
 
 
 @router.message(F.text == BTN_TOPUP)
@@ -32,7 +37,7 @@ async def topup_start(message: Message, state: FSMContext, db: Database):
     if not card:
         await message.answer("⚠️ شارژ کیف پول هنوز توسط مدیر فعال نشده است.")
         return
-    min_amount = int(await db.get_setting("min_topup", DEFAULT_MIN_TOPUP))
+    min_amount = await _min_topup(db)
     await state.set_state(Topup.amount)
     await message.answer(f"💳 مبلغ شارژ را به <b>تومان</b> بفرستید (حداقل {fmt_toman(min_amount)}):",
                          reply_markup=cancel_menu())
@@ -40,12 +45,11 @@ async def topup_start(message: Message, state: FSMContext, db: Database):
 
 @router.message(Topup.amount)
 async def topup_amount(message: Message, state: FSMContext, db: Database):
-    text = (message.text or "").translate(PERSIAN_DIGITS).replace(",", "").replace("٬", "").strip()
-    min_amount = int(await db.get_setting("min_topup", DEFAULT_MIN_TOPUP))
-    if not text.isdigit() or not min_amount <= int(text) <= MAX_TOPUP:
+    amount = to_int(message.text)
+    min_amount = await _min_topup(db)
+    if amount is None or not min_amount <= amount <= MAX_TOPUP:
         await message.answer(f"❗️ یک عدد بین {fmt_toman(min_amount)} و {fmt_toman(MAX_TOPUP)} بفرستید.")
         return
-    amount = int(text)
     card = await db.get_setting("card_number", "")
     holder = await db.get_setting("card_holder", "")
     await state.update_data(amount=amount)
@@ -59,8 +63,11 @@ async def topup_amount(message: Message, state: FSMContext, db: Database):
 
 @router.message(Topup.receipt, F.photo)
 async def topup_receipt(message: Message, state: FSMContext, db: Database, bot: Bot, user: User,
-                        admin_ids: list[int], is_admin: bool):
-    amount = (await state.get_data())["amount"]
+                        admins: Admins, is_admin: bool):
+    amount = (await state.get_data()).get("amount")
+    if not amount:
+        await state.clear()
+        return
     await state.clear()
     photo_id = message.photo[-1].file_id
     tid = await db.create_topup(user.id, amount, photo_id)
@@ -71,7 +78,7 @@ async def topup_receipt(message: Message, state: FSMContext, db: Database, bot: 
     caption = (f"💳 <b>درخواست شارژ #{tid}</b>\n"
                f"👤 {escape(user.first_name or '')} {uname}\n🆔 <code>{user.id}</code>\n"
                f"💵 مبلغ: <b>{fmt_toman(amount)}</b>")
-    for aid in admin_ids:
+    for aid in admins.all():
         try:
             await bot.send_photo(aid, photo_id, caption=caption, reply_markup=topup_review_menu(tid))
         except Exception as e:  # مدیر ربات را استارت نکرده یا بلاک کرده

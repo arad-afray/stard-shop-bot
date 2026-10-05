@@ -38,8 +38,17 @@
 | پیگیری وضعیت | `GET /orders/{id}` | `bot/shop.py`، `bot/worker.py` |
 | موجودی کیف پول API | `GET /wallet` | پنل مدیریت |
 | تعیین نتیجه‌ی سفارش test | `POST /test/orders/{id}/simulate` | پنل مدیریت |
+| نرخ استارز، TON و دلار (قیمت در گروه، ریکشن) | `GET /prices` | `bot/shop.py` |
+| کاتالوگ بوست (مدت‌ها و قیمت هر بوست) | `GET /boosts` | `bot/shop.py` |
+| پیش‌قیمت بوست | `POST /orders/quote` با `type=boost` و `duration` | `bot/shop.py` |
+| ثبت سفارش بوست | `POST /boosts/orders` | `bot/shop.py` |
+| پیگیری سفارش بوست | `GET /boosts/orders/{id}` | `bot/shop.py` |
+| لغو سفارش شروع‌نشده (لغو دستی مدیر) | `POST /orders/{id}/cancel` | `bot/shop.py` |
+| وضعیت سرویس‌ها و تراکنش‌ها | `GET /status`، `GET /transactions` | پنل مدیریت |
 
-کلاینت کامل در `bot/stard_api.py` است و متدهای دیگر (`products`، `categories`، `prices`، `stars_price`، `cancel_order`، `transactions`، …) را هم برای توسعه‌ی بعدی دارد.
+کلاینت کامل در `bot/stard_api.py` است. کاتالوگ‌ها و نرخ‌ها ۶۰ ثانیه کش می‌شوند تا ربات سریع بماند و از سقف ۶۰ درخواست در دقیقه رد نشود. پیش‌قیمت سفارش هیچ‌وقت کش نمی‌شود.
+
+> ❤️ **ریکشن استارزی** endpointی در Stard API ندارد. ربات قیمتش را از `GET /prices` (قیمت یک استارز × تعداد) حساب می‌کند و سفارش را برای انجام دستی به مدیر می‌فرستد.
 
 ## ۳. جریان یک خرید، قدم به قدم
 
@@ -103,6 +112,19 @@ Idempotency-Key: bot-42
 
 - برای پریمیوم و گیفت: `"type": "product", "product_id": …` فرستاده می‌شود. برای گیفت `gift_message` هم اضافه می‌شود.
 - **Idempotency-Key** برابر `bot-<شماره سفارش>` است. اگر شبکه قطع شود و پاسخ نرسد، ربات همان درخواست را با همان کلید دوباره می‌فرستد. Stard در این حالت سفارش تازه نمی‌سازد و پاسخ قبلی را برمی‌گرداند، پس خطر **دوبار خرید** وجود ندارد.
+
+### بوست
+
+```http
+POST /api/v1/orders/quote
+{"type": "boost", "quantity": 10, "duration": 7}
+
+POST /api/v1/boosts/orders
+Idempotency-Key: bot-43
+{"recipient": "@mychannel", "quantity": 10, "duration": 7, "quote_id": "qt_…", "metadata": {…}}
+```
+
+مدت‌های قابل فروش و سقف تعداد از `GET /boosts` خوانده می‌شوند. خطاهای `boost_unavailable` و `boost_disabled` به کاربر پیام مناسب نشان می‌دهند و پولی کسر نمی‌شود.
 
 ### قدم ۴: پیگیری خودکار
 
