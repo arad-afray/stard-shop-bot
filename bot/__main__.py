@@ -62,6 +62,21 @@ def _storage(services: Services):
     return MemoryStorage()
 
 
+async def _poll_forever(dp, bot) -> None:
+    """polling با تلاش دوباره روی خطای شبکه (تلگرام/VPN قطع)؛ توکن نامعتبر خطای قطعی است."""
+    from aiogram.exceptions import TelegramNetworkError, TelegramServerError
+    delay = 5
+    while True:
+        try:
+            await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types(),
+                                   handle_signals=False, close_bot_session=False)
+            return
+        except (TelegramNetworkError, TelegramServerError, OSError, asyncio.TimeoutError) as e:
+            log.warning("Telegram unreachable (%s); retrying in %ss", type(e).__name__, delay)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 120)
+
+
 async def main() -> int:
     settings = get_settings()
     setup_logging(settings.log_level, settings.log_dir, settings.secret_values())
@@ -134,13 +149,14 @@ async def main() -> int:
     polling = None
     try:
         if settings.role in ("all", "bot"):
-            await bot.delete_webhook(drop_pending_updates=False)
-            try:
-                await bot.set_my_commands(COMMANDS)
-            except Exception as e:
-                log.warning("set_my_commands failed: %s", type(e).__name__)
-            polling = asyncio.create_task(dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types(),
-                                                           handle_signals=False, close_bot_session=False))
+            # اگر تلگرام همین لحظه در دسترس نباشد (مثلاً VPN قطع است) پردازه را نمی‌کشیم:
+            # start_polling خودش با فاصله‌ی افزایشی دوباره تلاش می‌کند
+            for call in (bot.delete_webhook(drop_pending_updates=False), bot.set_my_commands(COMMANDS)):
+                try:
+                    await asyncio.wait_for(call, 30)
+                except Exception as e:
+                    log.warning("Telegram not reachable yet (%s) — polling will keep retrying", type(e).__name__)
+            polling = asyncio.create_task(_poll_forever(dp, bot))
             waiters = [polling, asyncio.create_task(stop.wait())]
             await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
             if polling.done() and not stop.is_set():
@@ -156,13 +172,15 @@ async def main() -> int:
     finally:
         log.info("shutting down…")
         if polling is not None and not polling.done():
-            await dp.stop_polling()
+            if dp._running_lock.locked():  # فقط اگر واقعاً در حال polling است (نه در انتظار تلاش دوباره)
+                await dp.stop_polling()
             polling.cancel()
         if worker is not None:
             worker.stop()
         if scheduler is not None:
             scheduler.stop()
-        await sup.stop()
+        # worker و زمان‌بند فرصت دارند کار فعلی‌شان را تمام کنند (کار نیمه‌کاره هم با lease بعداً ادامه پیدا می‌کند)
+        await sup.stop(grace={"worker": 20, "scheduler": 10})
         if http is not None:
             await http.cleanup()
         await services.close()

@@ -1,112 +1,74 @@
 =====================================================
-   دستورات مهم پروژه‌ی stard-shop-bot (ویندوز / PowerShell)
+   دستورات مهم stard-shop-bot نسخه 3 (ویندوز / PowerShell)
 =====================================================
 
-همه‌ی دستورها را در PowerShell بزنید.
+همه‌ی دستورها را در PowerShell داخل پوشه‌ی پروژه بزنید:
+  cd "C:\Users\arad\Desktop\New folder (3)\stard-shop-bot"
 موقع اجرای ربات، VPN باید روشن باشد (تلگرام در ایران فیلتر است).
 
 
 -----------------------------------------------------
-۱) نصب اولیه (فقط یک بار)
------------------------------------------------------
-
-پیش‌نیازها:
-  - Git:     https://git-scm.com/download/win
-  - Python:  https://www.python.org/downloads/
-             (موقع نصب تیک «Add python.exe to PATH» را بزنید)
-
-دانلود پروژه از گیت‌هاب:
-  git clone https://github.com/arad-afray/stard-shop-bot.git
-
-رفتن داخل پوشه‌ی پروژه:
-  cd stard-shop-bot
-
-نصب کتابخانه‌ها:
-  python -m pip install -r requirements.txt
-
-ساختن فایل تنظیمات:
-  copy .env.example .env
-
-باز کردن فایل تنظیمات برای پر کردن:
-  notepad .env
-
-  این سه خط را حتماً پر کنید و ذخیره کنید:
-    BOT_TOKEN=توکن ربات از @BotFather
-    ADMIN_IDS=آیدی عددی شما (از @userinfobot)
-    STARD_API_KEY=sk_test_...   (از stard-market.ir/developers/dashboard)
-
-
------------------------------------------------------
-۲) اجرای ربات
------------------------------------------------------
-
-رفتن داخل پوشه‌ی پروژه (هر بار که PowerShell را باز می‌کنید):
-  cd "C:\Users\arad\Desktop\New folder (3)\stard-shop-bot"
-
-روشن کردن ربات:
-  python -m bot
-
-  اگر در لاگ «Stard API OK» دیدید یعنی اتصال درست است.
-  تا وقتی این پنجره باز است ربات کار می‌کند.
-
-خاموش کردن ربات:
-  Ctrl + C
-
-
------------------------------------------------------
-۳) به‌روزرسانی (وقتی کد در گیت‌هاب عوض شد)
+۱) به‌روزرسانی از نسخه‌ی ۲ به ۳ (فقط یک بار)
 -----------------------------------------------------
 
   ۱. ربات را با Ctrl + C خاموش کنید
-  ۲. cd "C:\Users\arad\Desktop\New folder (3)\stard-shop-bot"
-  ۳. git pull
-  ۴. python -m pip install -r requirements.txt
-  ۵. python -m bot
+  ۲. فایل update.ps1 را از گیت‌هاب دانلود و در پوشه‌ی پروژه بگذارید:
+       curl.exe -L -o update.ps1 https://raw.githubusercontent.com/arad-afray/stard-shop-bot/claude/starship-bot-github-access-qggts8/update.ps1
+  ۳. اجرا:
+       powershell -ExecutionPolicy Bypass -File .\update.ps1
 
-  فایل .env و پوشه‌ی data با git pull پاک نمی‌شوند.
-  فایل‌های کد را خودتان تغییر ندهید، وگرنه git pull خطا می‌دهد.
-
-
------------------------------------------------------
-۴) دستورهای کمکی
------------------------------------------------------
-
-دیدن وضعیت فایل‌ها (آیا چیزی تغییر کرده):
-  git status
-
-اگر git pull به خاطر تغییر فایل‌ها خطا داد، برگرداندن کد به نسخه‌ی گیت‌هاب
-(تنظیمات .env و اطلاعات data دست نمی‌خورند):
-  git checkout -- .
-  git pull
-
-اجرای تست‌ها (برای اطمینان از سالم بودن کد):
-  python -m pip install -r requirements-dev.txt
-  python -m pytest -q
-
-بررسی دستی کلید Stard (در PowerShell):
-  curl.exe https://stard-market.ir/api/v1/ping -H "Authorization: Bearer sk_test_..."
+  کارهایی که انجام می‌دهد: پشتیبان از data و .env ← دریافت کد ← نصب کتابخانه‌ها ← ارتقای پایگاه داده
+  ← بررسی سلامت. اگر خطا بدهد، همه‌چیز خودکار به حالت قبل برمی‌گردد. اطلاعات کاربرها و موجودی‌ها حفظ می‌شود.
 
 
 -----------------------------------------------------
-۵) پشتیبان‌گیری
+۲) اجرای ربات (با Restart خودکار)
 -----------------------------------------------------
 
-اطلاعات کاربرها، موجودی‌ها و سفارش‌ها در این فایل است:
-  data\shop.db
+  powershell -ExecutionPolicy Bypass -File .\run.ps1
 
-وقتی ربات خاموش است، از پوشه‌ی data یک کپی جای امن نگه دارید.
-فایل .env را هم نگه دارید و به هیچ‌کس ندهید (توکن و کلید API در آن است).
+  اگر ربات کرش کند خودکار دوباره روشن می‌شود. بعد از به‌روزرسانی از داخل پنل هم خودکار Restart می‌شود.
+  خاموش کردن: Ctrl + C
+  (روش قدیمی «python -m bot» هم کار می‌کند، ولی Restart خودکار ندارد.)
 
 
 -----------------------------------------------------
-۶) اجرا روی سرور لینوکس با Docker (اختیاری)
+۳) به‌روزرسانی‌های بعدی
 -----------------------------------------------------
 
-  git clone https://github.com/arad-afray/stard-shop-bot.git
-  cd stard-shop-bot
-  cp .env.example .env
-  nano .env
-  docker compose up -d --build     روشن کردن
-  docker compose logs -f           دیدن لاگ
-  docker compose down              خاموش کردن
+  راه آسان: در ربات ← پنل مدیریت ← 🛠 سیستم ← 🔄 بررسی آپدیت پروژه ← 🚀 آپدیت
+  یا دستی:
+    powershell -ExecutionPolicy Bypass -File .\update.ps1
+
+
+-----------------------------------------------------
+۴) پشتیبان‌گیری
+-----------------------------------------------------
+
+  خودکار: هر ۲۴ ساعت در پوشه‌ی backups (قابل تنظیم در .env).
+  دستی: پنل ← 🛠 سیستم ← 💾 Backup Manager ← Create Backup (و دکمه‌ی دانلود)
+  پوشه‌ی backups و فایل .env را گاهی روی فلش/فضای ابری هم کپی کنید.
+  فایل .env را به هیچ‌کس ندهید (توکن و کلید API در آن است).
+
+
+-----------------------------------------------------
+۵) دستورهای کمکی
+-----------------------------------------------------
+
+  وضعیت پایگاه داده:          python -m bot.migrate --check
+  بررسی سلامت کد و پایگاه داده: python -m bot.selfcheck
+  اجرای تست‌ها:                python -m pip install -r requirements-dev.txt
+                                python -m pytest -q
+  لاگ‌ها:                      پوشه‌ی logs (یا پنل ← 🛠 سیستم ← 📜 لاگ‌های سیستم)
+
+
+-----------------------------------------------------
+۶) سرور لینوکس با Docker (PostgreSQL + Redis)
+-----------------------------------------------------
+
+  cp .env.example .env && nano .env      (POSTGRES_PASSWORD را هم بگذارید)
+  docker compose up -d --build           روشن کردن
+  docker compose logs -f bot worker      دیدن لاگ
+  docker compose down                    خاموش کردن
   git pull && docker compose up -d --build     به‌روزرسانی
+  راهنمای کامل: docs/DEPLOY.md

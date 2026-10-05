@@ -132,7 +132,15 @@ class Supervisor:
             await asyncio.sleep(delay)
             delay = min(delay * 2, self.MAX_BACKOFF)
 
-    async def stop(self) -> None:
+    async def stop(self, grace: dict[str, float] | None = None) -> None:
+        """توقف: سرویس‌های داخل grace تا این مدت فرصت دارند خودشان تمام شوند؛ بقیه فوراً لغو می‌شوند."""
+        grace = grace or {}
+        for name, t in self.tasks.items():
+            if name not in grace:
+                t.cancel()
+        waiting = {self.tasks[n]: s for n, s in grace.items() if n in self.tasks}
+        if waiting:
+            await asyncio.wait(list(waiting), timeout=max(waiting.values()))
         for t in self.tasks.values():
             t.cancel()
         for t in self.tasks.values():
