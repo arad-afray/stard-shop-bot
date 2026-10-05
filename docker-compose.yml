@@ -1,9 +1,63 @@
+# Production: PostgreSQL + Redis + ربات + worker جدا.
+#   cp .env.example .env   (و BOT_TOKEN، ADMIN_IDS، STARD_API_KEY، POSTGRES_PASSWORD را پر کنید)
+#   docker compose up -d --build
+# برای worker بیشتر:  docker compose up -d --scale worker=3
+x-app: &app
+  build: .
+  env_file: .env
+  restart: unless-stopped
+  volumes:
+    - ./logs:/app/logs
+    - ./backups:/app/backups
+  depends_on:
+    postgres: {condition: service_healthy}
+    redis: {condition: service_healthy}
+
 services:
-  bot:
-    build: .
-    env_file: .env
-    environment:
-      DATABASE_PATH: /app/data/shop.db
-    volumes:
-      - ./data:/app/data
+  postgres:
+    image: postgres:16-alpine
     restart: unless-stopped
+    environment:
+      POSTGRES_USER: stard
+      POSTGRES_DB: stard
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stard -d stard"]
+      interval: 10s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      retries: 10
+
+  bot:
+    <<: *app
+    environment:
+      DATABASE_URL: postgresql://stard:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/stard
+      REDIS_URL: redis://redis:6379/0
+      HTTP_HOST: 0.0.0.0
+      ROLE: bot
+    # فقط روی خود سرور؛ برای وب‌هوک Stard یک reverse proxy با HTTPS جلویش بگذارید
+    ports:
+      - "127.0.0.1:8080:8080"
+
+  worker:
+    <<: *app
+    environment:
+      DATABASE_URL: postgresql://stard:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/stard
+      REDIS_URL: redis://redis:6379/0
+      HTTP_HOST: 0.0.0.0
+      ROLE: worker
+
+volumes:
+  pgdata:
+  redisdata:

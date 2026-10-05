@@ -1,5 +1,7 @@
 .env
 data/
+logs/
+backups/
 *.db
 *.db-*
 __pycache__/

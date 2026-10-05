@@ -1,0 +1,36 @@
+# با push یک تگ vX.Y.Z: تست‌ها اجرا می‌شوند، فایل zip و SHA256SUMS ساخته و یک Release رسمی منتشر می‌شود.
+# به‌روزرسانی خودکار ربات (بدون git) فقط همین فایل‌های امضاشده را نصب می‌کند.
+name: release
+on:
+  push:
+    tags: ["v*.*.*"]
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Version in code must match the tag
+        run: |
+          V=$(python -c "import bot; print(bot.__version__)")
+          [ "v$V" = "${GITHUB_REF_NAME}" ] || { echo "bot/__init__.py has $V but tag is ${GITHUB_REF_NAME}"; exit 1; }
+      - run: pip install -r requirements-dev.txt && pytest -q
+      - name: Build release archive
+        run: |
+          NAME=stard-shop-bot-${GITHUB_REF_NAME}
+          git archive --format=zip --prefix=${NAME}/ -o ${NAME}.zip HEAD
+          sha256sum ${NAME}.zip > SHA256SUMS
+      - name: Changelog for this version
+        run: |
+          V=${GITHUB_REF_NAME#v}
+          awk "/^## ${V//./\\.}/{f=1;next} /^## /{f=0} f" CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "Release ${GITHUB_REF_NAME}" > notes.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          body_path: notes.md
+          files: |
+            stard-shop-bot-${{ github.ref_name }}.zip
+            SHA256SUMS

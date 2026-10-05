@@ -248,3 +248,11 @@ def test_verify_signature_edge_cases():
     assert not verify_signature(body, None, SECRET)
     assert not verify_signature(body, "garbage", SECRET)
     assert not verify_signature(body + b" ", _sign(body), SECRET)
+
+
+async def test_metrics_requires_key_when_server_is_public(client):
+    c, ctx, services, _ = client
+    services.settings.http_host = "0.0.0.0"   # پشت proxy: «محلی» دیگر قابل اعتماد نیست
+    assert (await c.get("/metrics")).status == 401
+    kid, key = await apikeys.create_key(ctx.db, "prom", ["metrics:read"])
+    assert (await c.get("/metrics", headers={"Authorization": f"Bearer {key}"})).status == 200

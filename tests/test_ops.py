@@ -368,3 +368,50 @@ case $n in 0) exit 3;; 1|2|3) exit 1;; *) exit 0;; esac
     assert "rolling back to abc123" in out and "stopped normally" in out
     assert "checkout --force --detach abc123" in gitlog.read_text()
     assert not (work / "data" / "update-pending.json").exists()
+
+
+async def test_archive_mode_update_validates_checksum_and_extracts(db, tmp_path, monkeypatch):
+    """همان zip که release.yml با git archive می‌سازد: SHA256SUMS بررسی و کد استخراج می‌شود، .env و data دست نمی‌خورند."""
+    import hashlib
+    monkeypatch.setattr("bot.updater.install_mode", lambda root: "archive")
+    src = tmp_path / "src"
+    (src / "bot" / "migrations" / "versions").mkdir(parents=True)
+    for rev in ("0001_a", "0002_b", "0003_c", "0004_d"):
+        (src / "bot" / "migrations" / "versions" / f"{rev}.py").write_text("")
+    (src / "bot" / "__init__.py").write_text('__version__ = "99.0.0"\n')
+    (src / "requirements.txt").write_text("")
+    _git(src, "init", "-q", "-b", "main")
+    _git(src, "add", "-A")
+    _git(src, "commit", "-qm", "r")
+    zname = "stard-shop-bot-v99.0.0.zip"
+    subprocess.run(["git", "archive", "--format=zip", "--prefix=stard-shop-bot-v99.0.0/", "-o", str(tmp_path / zname),
+                    "HEAD"], cwd=src, check=True)
+    data = (tmp_path / zname).read_bytes()
+    sums = f"{hashlib.sha256(data).hexdigest()}  {zname}\n"
+
+    def handler(req):
+        if req.url.path.endswith("SHA256SUMS"):
+            return httpx.Response(200, text=sums)
+        return httpx.Response(200, content=data)
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    install = tmp_path / "install"
+    (install / "bot").mkdir(parents=True)
+    (install / "bot" / "__init__.py").write_text(f'__version__ = "{__version__}"\n')
+    (install / ".env").write_text("SECRET=keep")
+    (install / "data").mkdir()
+    (install / "data" / "shop.db").write_text("db")
+    up = Updater(_settings(tmp_path), db, BackupManager(db, str(tmp_path / "bk")), DistributedLock(db, "t"),
+                 root=str(install), runner=_runner(), http=http, data_dir=str(install / "data"))
+    rel = ReleaseInfo(current=__version__, latest="99.0.0", tag="v99.0.0", newer=True,
+                      assets={zname: "https://x/zip", "SHA256SUMS": "https://x/SHA256SUMS"})
+    state = await up.apply(rel, request_restart=lambda: None)
+    assert state.status == "restarting", state
+    assert '99.0.0' in (install / "bot" / "__init__.py").read_text()
+    assert (install / ".env").read_text() == "SECRET=keep" and (install / "data" / "shop.db").read_text() == "db"
+    assert (install / "bot" / "migrations" / "versions" / "0004_d.py").exists()
+    # فایل دست‌کاری‌شده رد می‌شود
+    sums = "0" * 64 + f"  {zname}\n"
+    (install / "bot" / "__init__.py").write_text(f'__version__ = "{__version__}"\n')
+    state = await up.apply(rel)
+    assert state.status == "rolled_back" and "SHA-256" in state.error
+    assert __version__ in (install / "bot" / "__init__.py").read_text()

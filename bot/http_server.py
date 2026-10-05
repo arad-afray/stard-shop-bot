@@ -75,7 +75,9 @@ def build_app(services: Any) -> web.Application:
     app.middlewares.append(mw)
 
     async def auth(request: web.Request, scope: str, *, allow_local: bool = False) -> web.Response | None:
-        if allow_local and _is_local(request):
+        # پشت reverse proxy همه‌ی درخواست‌ها از 127.0.0.1 می‌آیند؛ پس استثنای «محلی» فقط وقتی معتبر است
+        # که خود سرور روی loopback گوش بدهد و از بیرون در دسترس نباشد
+        if allow_local and _is_local(request) and services.settings.http_host in ("127.0.0.1", "localhost", "::1"):
             return None
         key = request.headers.get("Authorization", "").removeprefix("Bearer ").strip() or None
         row = await apikeys.verify(services.db, key, scope)

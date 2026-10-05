@@ -1,6 +1,11 @@
 .env
+.env.*
 data/
+logs/
+backups/
 .git/
 __pycache__/
 .pytest_cache/
 tests/
+*.db
+*.db-*
