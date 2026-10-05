@@ -1,9 +1,18 @@
-"""نقطه‌ی شروع: python -m bot"""
+"""نقطه‌ی شروع: python -m bot
+
+ROLE=all     (پیش‌فرض) ربات + worker + زمان‌بند در یک پردازه — مناسب سرور کوچک و ویندوز
+ROLE=bot     فقط دریافت پیام‌های تلگرام (می‌شود چند نمونه اجرا کرد؛ Redis لازم است)
+ROLE=worker  فقط صف و کارهای پس‌زمینه (می‌شود چند نمونه اجرا کرد)
+
+کد خروج 3 یعنی «لطفاً دوباره اجرا کن» (بعد از به‌روزرسانی یا بازگردانی پشتیبان)؛ run.ps1/run.sh و Docker
+این کار را خودکار انجام می‌دهند.
+"""
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
+import signal
+import sys
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -14,10 +23,12 @@ from aiogram.types import BotCommand
 from . import __version__
 from .app import setup
 from .config import get_settings
-from .db import Database
-from .shop import Shop
-from .stard_api import StardClient, StardError
-from .worker import order_worker
+from .logging_setup import service_name, setup_logging
+from .runtime import Services, Supervisor, build_services
+from .stard_api import StardError
+from .worker import Context, JobWorker, Scheduler
+
+RESTART_EXIT_CODE = 3
 
 COMMANDS = [
     BotCommand(command="start", description="منوی اصلی"),
@@ -29,43 +40,106 @@ COMMANDS = [
     BotCommand(command="cancel", description="انصراف"),
 ]
 
+log = logging.getLogger("bot")
 
-async def main() -> None:
+
+def _storage(services: Services):
+    if services.redis is not None:
+        from aiogram.fsm.storage.redis import DefaultKeyBuilder, RedisStorage
+        # FSM مشترک بین همه‌ی نمونه‌ها؛ حالت خرید با ری‌استارت یا تعویض نمونه گم نمی‌شود
+        return RedisStorage(services.redis, key_builder=DefaultKeyBuilder(prefix="stardfsm", with_destiny=True),
+                            state_ttl=86400, data_ttl=86400)
+    if services.settings.role == "bot":
+        log.warning("ROLE=bot without REDIS_URL: checkout state is per-instance; run a single bot instance")
+    return MemoryStorage()
+
+
+async def main() -> int:
     settings = get_settings()
-    logging.basicConfig(level=settings.log_level,
-                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    log = logging.getLogger("bot")
-    log.info("stard-shop-bot v%s", __version__)
+    setup_logging(settings.log_level, settings.log_dir, settings.secret_values())
+    service_name.set(settings.role)
+    log.info("stard-shop-bot v%s starting (role=%s, instance=%s)", __version__, settings.role, settings.instance_id)
 
-    db = Database(settings.database_path)
-    await db.connect()
-    api = StardClient(settings.stard_api_key, settings.stard_base_url)
-    shop = Shop(db, api, default_profit=settings.default_profit_percent, pay_currency=settings.stard_pay_currency)
-
+    services = await build_services(settings)
+    log.info("database: %s | redis: %s", services.db.dialect, "on" if services.redis is not None else "off")
     try:
-        ping = await api.ping()
-        log.info("Stard API OK: environment=%s scopes=%s", ping["environment"], ping["key"]["scopes"])
+        ping = await services.api.ping()
+        log.info("Stard API OK: environment=%s", ping.get("environment"))
     except StardError as e:
-        log.error("Stard API check failed: %s — کلید STARD_API_KEY را بررسی کنید", e)
+        log.error("Stard API check failed: %s %s — STARD_API_KEY را بررسی کنید", e.status, e.code)
 
-    bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-    dp = Dispatcher(storage=MemoryStorage())
-    await setup(dp, db=db, shop=shop, settings=settings)
+    bot = Bot(settings.bot_token.get_secret_value(), default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    dp = Dispatcher(storage=_storage(services))
+    extra = dict(services.extra)
+    admins = await setup(dp, db=services.db, shop=services.shop, settings=settings, queue=services.queue,
+                         locks=services.locks, limiter=services.limiter, extra={"services": services, **extra})
+    ctx = Context(bot=bot, shop=services.shop, db=services.db, queue=services.queue, locks=services.locks,
+                  admins=admins, settings=settings, metrics=extra.get("metrics"), extra=extra)
 
-    worker = asyncio.create_task(order_worker(shop, bot, settings.poll_interval_seconds))
+    async def alert(key: str, text: str) -> None:
+        from . import notify
+        await notify.to_admins(bot, admins, f"🚨 <b>هشدار</b>\n{text}")
+
+    sup = Supervisor(on_alert=alert)
+    services.extra["supervisor"] = sup
+    worker = scheduler = None
+    if settings.role in ("all", "worker"):
+        worker = JobWorker(ctx, concurrency=settings.worker_concurrency)
+        scheduler = Scheduler(ctx)
+        services.extra.update(worker=worker, scheduler=scheduler)
+        sup.start("worker", worker.run)
+        sup.start("scheduler", scheduler.run)
+
+    stop = asyncio.Event()
+    exit_code = {"code": 0}
+    services.extra["request_restart"] = lambda: (exit_code.update(code=RESTART_EXIT_CODE), stop.set())
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, stop.set)
+        except (NotImplementedError, RuntimeError):  # ویندوز
+            pass
+
+    polling = None
     try:
-        await bot.delete_webhook(drop_pending_updates=False)
-        with contextlib.suppress(Exception):
-            await bot.set_my_commands(COMMANDS)
-        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+        if settings.role in ("all", "bot"):
+            await bot.delete_webhook(drop_pending_updates=False)
+            try:
+                await bot.set_my_commands(COMMANDS)
+            except Exception as e:
+                log.warning("set_my_commands failed: %s", type(e).__name__)
+            polling = asyncio.create_task(dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types(),
+                                                           handle_signals=False, close_bot_session=False))
+            waiters = [polling, asyncio.create_task(stop.wait())]
+            await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+        else:
+            await stop.wait()
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass
     finally:
-        worker.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await worker
-        await api.close()
-        await db.close()
+        log.info("shutting down…")
+        if polling is not None and not polling.done():
+            await dp.stop_polling()
+            polling.cancel()
+        if worker is not None:
+            worker.stop()
+        if scheduler is not None:
+            scheduler.stop()
+        await sup.stop()
+        await services.close()
         await bot.session.close()
+    return exit_code["code"]
+
+
+def run() -> None:
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    try:
+        code = asyncio.run(main())
+    except KeyboardInterrupt:
+        code = 0
+    sys.exit(code)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    run()

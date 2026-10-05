@@ -125,6 +125,7 @@ def setup_logging(level: str = "INFO", log_dir: str | None = "logs", secrets: li
     # لاگ httpx آدرس کامل درخواست‌ها را می‌نویسد؛ در INFO لازم نیست
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("aiogram.event").setLevel(logging.WARNING)
+    logging.getLogger("alembic.runtime.plugins").setLevel(logging.WARNING)
 
 
 def read_logs(log_dir: str, *, level: str | None = None, search: str | None = None, service: str | None = None,

@@ -14,6 +14,7 @@ from sqlalchemy import (BigInteger, CheckConstraint, Column, Float, Index, Integ
 metadata = MetaData()
 
 T = String(20)  # زمان ISO
+TMS = String(32)  # زمان با میلی‌ثانیه (صف، قفل، heartbeat)
 
 users = Table(
     "users", metadata,
@@ -26,6 +27,7 @@ users = Table(
     Column("ban_reason", String(256)),
     Column("referrer_id", BigInteger),
     Column("risk_score", Integer, nullable=False, server_default="0"),
+    Column("blocked", Integer, nullable=False, server_default="0"),  # ربات را بلاک کرده
     Column("last_seen", T),
     Column("created_at", T, nullable=False),
     CheckConstraint("balance >= 0", name="ck_users_balance_nonneg"),
@@ -147,12 +149,12 @@ jobs = Table(
     Column("status", String(16), nullable=False, server_default="queued"),  # queued|running|done|dead
     Column("attempts", Integer, nullable=False, server_default="0"),
     Column("max_attempts", Integer, nullable=False, server_default="8"),
-    Column("run_at", T, nullable=False),
+    Column("run_at", TMS, nullable=False),
     Column("locked_by", String(64)),
-    Column("locked_until", T),
+    Column("locked_until", TMS),
     Column("last_error", Text),
-    Column("created_at", T, nullable=False),
-    Column("updated_at", T, nullable=False),
+    Column("created_at", TMS, nullable=False),
+    Column("updated_at", TMS, nullable=False),
 )
 Index("idx_jobs_ready", jobs.c.status, jobs.c.run_at)
 Index("uq_jobs_dedupe", jobs.c.dedupe_key, unique=True)
@@ -161,8 +163,8 @@ heartbeats = Table(
     "heartbeats", metadata,
     Column("service", String(32), nullable=False),
     Column("instance", String(64), nullable=False),
-    Column("last_seen", T, nullable=False),
-    Column("started_at", T, nullable=False),
+    Column("last_seen", TMS, nullable=False),
+    Column("started_at", TMS, nullable=False),
     Column("info", Text),
     PrimaryKeyConstraint("service", "instance"),
 )
@@ -171,7 +173,7 @@ locks = Table(
     "locks", metadata,
     Column("name", String(64), primary_key=True),
     Column("owner", String(64), nullable=False),
-    Column("expires_at", T, nullable=False),
+    Column("expires_at", TMS, nullable=False),
 )
 
 rate_limits = Table(
@@ -293,4 +295,21 @@ reward_claims = Table(
     Column("amount", BigInteger, nullable=False),
     Column("created_at", T, nullable=False),
     PrimaryKeyConstraint("user_id", "kind", "day"),
+)
+
+broadcasts = Table(
+    "broadcasts", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("admin_id", BigInteger, nullable=False),
+    Column("from_chat", BigInteger, nullable=False),
+    Column("message_id", BigInteger, nullable=False),
+    Column("segment", String(32), nullable=False, server_default="all"),
+    Column("cursor", BigInteger, nullable=False, server_default="0"),
+    Column("total", Integer, nullable=False, server_default="0"),
+    Column("sent", Integer, nullable=False, server_default="0"),
+    Column("failed", Integer, nullable=False, server_default="0"),
+    Column("blocked", Integer, nullable=False, server_default="0"),
+    Column("status", String(16), nullable=False, server_default="queued"),
+    Column("created_at", T, nullable=False),
+    Column("finished_at", T),
 )

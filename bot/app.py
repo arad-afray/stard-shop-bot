@@ -2,18 +2,32 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
-from aiogram import Dispatcher, F, Router
+from aiogram import BaseMiddleware, Dispatcher, F, Router
 from aiogram.types import ErrorEvent
 
 from .admins import Admins
 from .config import Settings
 from .db import Database
 from .handlers import admin, prices, shop as shop_handlers, topup, user
-from .middlewares import JoinChecker, JoinMiddleware, UserMiddleware
+from .logging_setup import correlation_id, redact
+from .middlewares import JoinChecker, JoinMiddleware, ThrottleMiddleware, UserMiddleware
 from .shop import Shop
 
 log = logging.getLogger(__name__)
+
+
+class CorrelationMiddleware(BaseMiddleware):
+    """هر آپدیت تلگرام یک correlation id می‌گیرد (u<update_id>) تا لاگ‌هایش با هم پیدا شوند."""
+
+    async def __call__(self, handler, event, data):
+        upd = data.get("event_update")
+        token = correlation_id.set(f"u{upd.update_id}" if upd is not None else "u-")
+        try:
+            return await handler(event, data)
+        finally:
+            correlation_id.reset(token)
 
 
 def build_routers() -> Router:
@@ -30,19 +44,28 @@ def build_routers() -> Router:
     return root
 
 
-async def setup(dp: Dispatcher, *, db: Database, shop: Shop, settings: Settings) -> Admins:
+async def setup(dp: Dispatcher, *, db: Database, shop: Shop, settings: Settings, queue: Any = None,
+                locks: Any = None, limiter: Any = None, extra: dict | None = None) -> Admins:
     admins = Admins(db, settings.admin_ids)
     await admins.load()
     joins = JoinChecker(db)
+    risk = (extra or {}).get("risk")
+    dp.update.outer_middleware(CorrelationMiddleware())
     for observer in (dp.message, dp.callback_query):
         observer.outer_middleware(UserMiddleware(db, admins))
+        observer.outer_middleware(ThrottleMiddleware(limiter=limiter, risk=risk))
         observer.outer_middleware(JoinMiddleware(joins))
     dp.include_router(build_routers())
-    dp.workflow_data.update(db=db, shop=shop, settings=settings, admins=admins, joins=joins)
+    dp.workflow_data.update(db=db, shop=shop, settings=settings, admins=admins, joins=joins, queue=queue,
+                            locks=locks, limiter=limiter, **(extra or {}))
 
     @dp.errors()
     async def on_error(event: ErrorEvent) -> bool:
-        log.exception("unhandled error: %s", event.exception, exc_info=event.exception)
+        log.error("unhandled error: %s", redact(f"{type(event.exception).__name__}: {event.exception}"),
+                  exc_info=event.exception)
+        metrics = dp.workflow_data.get("metrics")
+        if metrics is not None:
+            metrics.inc("errors_total")
         cb = event.update.callback_query
         if cb is not None:
             try:

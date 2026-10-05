@@ -41,7 +41,7 @@ class UserMiddleware(BaseMiddleware):
         if chat is not None and chat.type != "private":
             return await handler(event, data)
         user, created = await self.db.upsert_user(tg_user.id, tg_user.username, tg_user.first_name,
-                                                  _ref_from_start(event))
+                                                  _ref_from_start(event), tg_user.language_code)
         is_admin = self.admins.is_admin(tg_user.id)
         if user.banned and not is_admin:
             if isinstance(event, Message):
@@ -117,3 +117,43 @@ class JoinMiddleware(BaseMiddleware):
             if event.message:
                 await event.message.answer(text, reply_markup=join_menu(missing))
         return None
+
+
+class ThrottleMiddleware(BaseMiddleware):
+    """ضد اسپم داخل پردازه (بدون پایگاه داده، خیلی سریع): بیش از N رویداد در چند ثانیه نادیده گرفته می‌شود.
+    کارهای مدیر هم سقف جداگانه‌ی توزیع‌شده دارند (RateLimiter). هر سرریز به عنوان رویداد ریسک ثبت می‌شود."""
+
+    def __init__(self, limit: int = 25, window: float = 10.0, limiter=None, risk=None):
+        self.limit, self.window = limit, window
+        self.limiter = limiter
+        self.risk = risk
+        self._hits: dict[int, list[float]] = {}
+        self._warned: dict[int, float] = {}
+
+    async def __call__(self, handler, event, data):
+        u = data.get("event_from_user")
+        if u is None or data.get("event_chat") is None or data["event_chat"].type != "private":
+            return await handler(event, data)
+        t = time.monotonic()
+        hits = [h for h in self._hits.get(u.id, []) if t - h < self.window]
+        hits.append(t)
+        self._hits[u.id] = hits
+        if len(self._hits) > 50_000:  # جلوگیری از رشد بی‌پایان حافظه
+            self._hits = {k: v for k, v in self._hits.items() if t - v[-1] < self.window}
+        if len(hits) > self.limit and not data.get("is_admin"):
+            if t - self._warned.get(u.id, 0) > self.window:
+                self._warned[u.id] = t
+                log.warning("flood from user %s (%s events/%ss)", u.id, len(hits), self.window)
+                if self.risk is not None:
+                    await self.risk.record(u.id, "spam")
+                if isinstance(event, Message):
+                    await event.answer("⏳ پیام‌های شما خیلی سریع است؛ چند ثانیه صبر کنید.")
+            if isinstance(event, CallbackQuery):
+                await event.answer()
+            return None
+        if data.get("is_admin") and isinstance(event, CallbackQuery) and self.limiter is not None:
+            from .locks import allow
+            if not await allow(self.limiter, "admin", u.id):
+                await event.answer("⏳ کارهای مدیریتی خیلی سریع است؛ چند ثانیه صبر کنید.", show_alert=True)
+                return None
+        return await handler(event, data)

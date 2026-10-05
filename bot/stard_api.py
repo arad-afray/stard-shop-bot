@@ -17,6 +17,7 @@ import httpx
 from . import __version__
 
 log = logging.getLogger(__name__)
+_sleep = asyncio.sleep  # جدا تا تست‌ها بتوانند فقط انتظار تلاش دوباره‌ی API را سریع کنند
 
 # وضعیت‌های نهایی سفارش طبق مستندات /docs/orders
 FINAL_STATUSES = {"completed", "cancelled", "refunded", "failed"}
@@ -71,7 +72,7 @@ class StardClient:
             except httpx.TransportError as e:
                 if not can_retry or attempt == self.max_retries:
                     raise StardError(0, "network_error", f"خطای شبکه: {e}") from e
-                await asyncio.sleep(delay)
+                await _sleep(delay)
                 delay *= 2
                 continue
 
@@ -87,7 +88,7 @@ class StardClient:
                     except ValueError:
                         pass
                 log.warning("Stard %s %s -> %s, retry in %.1fs", method, path, err.code, wait)
-                await asyncio.sleep(wait)
+                await _sleep(wait)
                 delay *= 2
                 continue
             raise err

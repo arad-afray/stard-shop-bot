@@ -11,6 +11,7 @@ from aiogram.types import Message
 
 from ..admins import Admins
 from ..db import Database, User
+from ..locks import RateLimiter, allow
 from ..pricing import fmt_toman, to_int
 from ..ui import BTN_TOPUP, cancel_menu, main_menu, topup_review_menu
 
@@ -63,8 +64,11 @@ async def topup_amount(message: Message, state: FSMContext, db: Database):
 
 @router.message(Topup.receipt, F.photo)
 async def topup_receipt(message: Message, state: FSMContext, db: Database, bot: Bot, user: User,
-                        admins: Admins, is_admin: bool):
+                        admins: Admins, is_admin: bool, limiter: RateLimiter | None = None):
     amount = (await state.get_data()).get("amount")
+    if not await allow(limiter, "topup", user.id):
+        await message.answer("⏳ تعداد درخواست‌های شارژ در این ساعت زیاد است؛ بعداً دوباره بفرستید.")
+        return
     if not amount:
         await state.clear()
         return

@@ -1,65 +1,25 @@
 """تست سرتاسری: آپدیت‌های واقعی تلگرام از Dispatcher عبور می‌کنند (بدون اینترنت)."""
 import datetime as dt
-import itertools
 
 import pytest
 
-from tests.conftest import new_db, requires_sqlite
+from tests.conftest import new_db
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
-from aiogram.client.session.base import BaseSession
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.methods import TelegramMethod
-from aiogram.types import CallbackQuery, Chat, Message, Update, User as TgUser
+from aiogram.types import CallbackQuery, Chat, Message, Update
 
 from bot.config import Settings
-from bot.db import Database
 from bot.app import setup
+from bot.locks import DistributedLock, RateLimiter
+from bot.queue import JobQueue
 from bot.shop import Shop
 from bot.stard_api import StardClient
 from bot.ui import JOIN_CHECK, Act, Adm, BoostDur, BoostQty, Nav, ReactQty, StarsQty
 from tests.fake_stard import FakeStard
+from tests.helpers import RecordingSession, ids, tg_user
 
 ADMIN, CUSTOMER = 100, 200
-ids = itertools.count(1)
-
-
-class RecordingSession(BaseSession):
-    def __init__(self):
-        super().__init__()
-        self.sent: list[TelegramMethod] = []
-        self.members: dict[int, str] = {}  # وضعیت عضویت کاربران در کانال اجباری
-
-    async def make_request(self, bot, method, timeout=None):
-        self.sent.append(method)
-        name = type(method).__name__
-        if name == "GetMe":
-            return TgUser(id=42, is_bot=True, first_name="Shop", username="shop_bot")
-        if name == "GetChatMember":
-            from aiogram.types import ChatMemberLeft, ChatMemberMember
-            if self.members.get(method.user_id, "left") == "member":
-                return ChatMemberMember(user=tg_user(method.user_id))
-            return ChatMemberLeft(user=tg_user(method.user_id))
-        if name in ("SendMessage", "SendPhoto", "EditMessageText", "EditMessageCaption", "CopyMessage"):
-            if name == "CopyMessage":
-                return method.__returning__(message_id=next(ids))
-            return Message(message_id=next(ids), date=dt.datetime.now(),
-                           chat=Chat(id=getattr(method, "chat_id", None) or 1, type="private"),
-                           text=getattr(method, "text", None) or "")
-        return True
-
-    async def close(self):
-        pass
-
-    async def stream_content(self, *a, **k):
-        yield b""
-
-    def texts(self) -> list[str]:
-        return [getattr(m, "text", None) or getattr(m, "caption", None) or "" for m in self.sent
-                if type(m).__name__ != "AnswerCallbackQuery"]
-
-    def alerts(self) -> list[str]:
-        return [m.text or "" for m in self.sent if type(m).__name__ == "AnswerCallbackQuery"]
 
 
 @pytest.fixture(autouse=True)
@@ -75,19 +35,16 @@ async def env():
     db = await new_db()
     fake = FakeStard()
     api = StardClient("sk_test_ok", transport=fake.transport())
-    shop = Shop(db, api, default_profit=10)
+    queue, locks = JobQueue(db, "test"), DistributedLock(db, "test")
+    shop = Shop(db, api, default_profit=10, queue=queue, locks=locks)
     settings = Settings(bot_token="1:x", stard_api_key="sk_test_ok", admin_ids=[ADMIN])
     session = RecordingSession()
     bot = Bot("42:TEST", session=session, default=DefaultBotProperties(parse_mode="HTML"))
     dp = Dispatcher(storage=MemoryStorage())
-    await setup(dp, db=db, shop=shop, settings=settings)
+    await setup(dp, db=db, shop=shop, settings=settings, queue=queue, locks=locks, limiter=RateLimiter(db))
     yield dp, bot, session, db, fake
     await api.close()
     await db.close()
-
-
-def tg_user(uid):
-    return TgUser(id=uid, is_bot=False, first_name=f"U{uid}", username=f"user{uid}")
 
 
 async def send(dp, bot, uid, text=None, photo=None, chat=None):

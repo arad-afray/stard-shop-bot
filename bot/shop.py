@@ -35,6 +35,7 @@ COUPON_RE = re.compile(r"^[A-Za-z0-9_-]{3,32}$")
 DEFINITE_REJECT = {400, 402, 403, 404, 409, 422}
 
 CACHE_TTL = 60  # ثانیه؛ کاتالوگ و نرخ‌ها. پیش‌قیمت سفارش هیچ‌وقت کش نمی‌شود.
+SUBMIT_GRACE = 30  # ثانیه؛ worker بعد از این مدت سراغ ارسال سفارش می‌رود اگر ارسال درون‌خطی کامل نشده باشد
 
 
 @dataclass
@@ -77,11 +78,13 @@ def normalize_post_link(text: str) -> str | None:
 
 class Shop:
     def __init__(self, db: Database, api: StardClient, *, default_profit: float = 10.0,
-                 pay_currency: str | None = None):
+                 pay_currency: str | None = None, queue=None, locks=None):
         self.db = db
         self.api = api
         self.default_profit = default_profit
         self.pay_currency = pay_currency
+        self.queue = queue      # JobQueue؛ اگر None باشد سفارش فقط درون‌خطی ارسال می‌شود (تست‌های قدیمی)
+        self.locks = locks      # DistributedLock
         self._cache: dict[str, tuple[float, Any]] = {}
 
     async def _cached(self, key: str, fetch: Callable[[], Awaitable[Any]], ttl: float = CACHE_TTL) -> Any:
@@ -248,13 +251,20 @@ class Shop:
             price, discount = await self.check_coupon(coupon, user_id, offer)
             coupon = coupon.strip().upper()
         manual = offer.type == "reaction"
+
+        async def outbox(c, oid: int) -> None:
+            # الگوی outbox: کار ارسال در همان تراکنش کسر پول ثبت می‌شود. اگر ربات بلافاصله بعد از پرداخت
+            # کرش کند، worker سفارش را با همان Idempotency-Key می‌فرستد؛ سفارش هرگز گم نمی‌شود.
+            if self.queue is not None and not manual:
+                await self.queue.enqueue("order.submit", {"oid": oid}, dedupe_key=f"order:{oid}",
+                                         delay=SUBMIT_GRACE, c=c)
         try:
             oid = await self.db.create_order_and_debit(
                 user_id=user_id, type_=offer.type, category=offer.category, product_id=offer.product_id,
                 title=offer.title, quantity=offer.quantity, recipient=recipient, gift_message=gift_message,
                 quote_id=offer.quote_id, base_amount=offer.base_amount, price=price, duration=offer.duration,
                 status="manual" if manual else "new", coupon=coupon, discount=discount,
-                checkout_id=checkout_id)
+                checkout_id=checkout_id, after_insert=outbox)
         except CouponInvalid as e:
             raise ShopError("کد تخفیف دیگر معتبر نیست. دوباره بدون کد یا با کد دیگر تلاش کنید.") from e
         if manual:
@@ -266,7 +276,21 @@ class Shop:
         return oid
 
     async def submit(self, oid: int) -> None:
-        """ارسال سفارش محلی به Stard. با Idempotency-Key تکرارش امن است."""
+        """ارسال سفارش محلی به Stard. با Idempotency-Key تکرارش امن است.
+
+        قفل توزیع‌شده‌ی order:<id> نمی‌گذارد دو نمونه (ربات و worker) هم‌زمان یک سفارش را بفرستند.
+        """
+        if self.locks is not None:
+            if not await self.locks.acquire(f"order:{oid}", 90):
+                return  # نمونه‌ی دیگری همین الان در حال ارسال است
+            try:
+                await self._submit(oid)
+            finally:
+                await self.locks.release(f"order:{oid}")
+        else:
+            await self._submit(oid)
+
+    async def _submit(self, oid: int) -> None:
         o = await self.db.get_order(oid)
         if o is None or o["status"] != "new":
             return

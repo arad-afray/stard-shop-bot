@@ -60,6 +60,19 @@ def later(seconds: float) -> str:
     return ts(datetime.now(timezone.utc) + timedelta(seconds=seconds))
 
 
+def now_ms() -> str:
+    """زمان دقیق (میلی‌ثانیه) برای صف، قفل و heartbeat؛ همه‌ی مقایسه‌های آن جدول‌ها با همین قالب‌اند."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def later_ms(seconds: float) -> str:
+    return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def ago_ms(seconds: float) -> str:
+    return later_ms(-seconds)
+
+
 def today() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
@@ -278,7 +291,7 @@ class Database:
             stale = (u.last_seen or "") < ago(seconds=60)
             if u.username != username or u.first_name != first_name or stale or \
                     (language_code and u.language_code != language_code):
-                await self.write("UPDATE users SET username=:un, first_name=:fn, last_seen=:t, "
+                await self.write("UPDATE users SET username=:un, first_name=:fn, last_seen=:t, blocked=0, "
                                  "language_code=COALESCE(:lc, language_code) WHERE id=:id",
                                  {"un": username, "fn": first_name, "t": t, "lc": language_code, "id": uid})
                 u.username, u.first_name, u.last_seen = username, first_name, t

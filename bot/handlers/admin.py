@@ -2,7 +2,6 @@
 زیرمجموعه‌گیری، قیمت در گروه، کیف پول Stard، پیام همگانی، تنظیمات، پشتیبان و مدیرها."""
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import logging
 import os
@@ -12,7 +11,7 @@ from typing import Any
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatMemberStatus
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, Filter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -29,7 +28,9 @@ from ..shop import COUPON_RE, Shop, ShopError
 from ..stard_api import StardError
 from ..ui import (BTN_ADMIN, STATUS_LABEL, Adm, admin_menu, back_admin, cancel_menu, drop_markup, edit_or_send,
                   main_menu, topup_review_menu)
-from ..worker import on_status_change
+from ..locks import RateLimiter, allow
+from ..queue import JobQueue
+from ..worker import on_status_change, start_broadcast
 
 log = logging.getLogger(__name__)
 router = Router(name="admin")
@@ -545,8 +546,12 @@ async def cb_order_done(cb: CallbackQuery, callback_data: Adm, db: Database, sho
 
 
 @router.callback_query(Adm.filter(F.name == "o_refund"))
-async def cb_order_refund(cb: CallbackQuery, callback_data: Adm, shop: Shop, bot: Bot):
+async def cb_order_refund(cb: CallbackQuery, callback_data: Adm, shop: Shop, bot: Bot,
+                          limiter: RateLimiter | None = None):
     oid = to_int(callback_data.arg) or 0
+    if not await allow(limiter, "admin_refund", cb.from_user.id):
+        await cb.answer("⏳ سقف برگشت پول در دقیقه پر شده است.", show_alert=True)
+        return
     try:
         ok = await shop.admin_refund(oid, f"admin:{cb.from_user.id}", admin_id=cb.from_user.id)
     except ShopError as e:
@@ -864,34 +869,24 @@ async def broadcast_preview(message: Message, state: FSMContext, db: Database):
 
 
 @router.callback_query(Adm.filter(F.name == "bc_go"))
-async def broadcast_go(cb: CallbackQuery, state: FSMContext, db: Database, bot: Bot):
+async def broadcast_go(cb: CallbackQuery, state: FSMContext, db: Database, queue: JobQueue,
+                       limiter: RateLimiter | None = None):
     data = await state.get_data()
     if await state.get_state() != AdminForm.broadcast.state or "bc_msg" not in data:
         await cb.answer("پیامی برای ارسال نیست.", show_alert=True)
         return
+    if not await allow(limiter, "broadcast", cb.from_user.id):
+        await cb.answer("⏳ سقف پیام همگانی (۳ بار در ساعت) پر شده است.", show_alert=True)
+        return
     await state.clear()
-    await cb.answer("شروع شد")
     await drop_markup(cb.message)
-    ids = await db.all_user_ids()
-    status = await cb.message.answer(f"⏳ ارسال برای {len(ids):,} کاربر…", reply_markup=main_menu(True))
-    ok = fail = 0
-    for i, uid in enumerate(ids, 1):
-        for _ in range(3):
-            try:
-                await bot.copy_message(uid, data["bc_chat"], data["bc_msg"])
-                ok += 1
-                break
-            except TelegramRetryAfter as e:
-                await asyncio.sleep(e.retry_after)
-            except (TelegramForbiddenError, TelegramBadRequest, Exception):
-                fail += 1
-                break
-        if i % 200 == 0:
-            with contextlib.suppress(TelegramBadRequest):
-                await status.edit_text(f"⏳ {i:,}/{len(ids):,} | ✅ {ok:,} | ❌ {fail:,}")
-        await asyncio.sleep(0.05)  # زیر سقف ۳۰ پیام در ثانیه‌ی تلگرام
-    with contextlib.suppress(TelegramBadRequest):
-        await status.edit_text(f"📢 ارسال تمام شد.\n✅ موفق: {ok:,}\n❌ ناموفق (ربات را بلاک کرده‌اند): {fail:,}")
+    segment = data.get("bc_segment", "all")
+    bid = await start_broadcast(db, queue, admin_id=cb.from_user.id, from_chat=data["bc_chat"],
+                                message_id=data["bc_msg"], segment=segment)
+    await cb.answer("در صف ارسال قرار گرفت")
+    await cb.message.answer(f"📢 پیام همگانی #{bid} در صف قرار گرفت و در پس‌زمینه ارسال می‌شود "
+                            f"(حدود ۲۰ پیام در ثانیه). وضعیت: 🧾 سفارش‌ها/صف ← «📢 پیام‌های همگانی».\n"
+                            "در پایان گزارش برایتان فرستاده می‌شود.", reply_markup=main_menu(True))
 
 
 # ---------- تنظیمات ----------

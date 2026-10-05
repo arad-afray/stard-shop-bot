@@ -15,6 +15,7 @@ from aiogram.types import CallbackQuery, Message
 from .. import notify
 from ..admins import Admins
 from ..db import Database, InsufficientBalance, User
+from ..locks import RateLimiter, allow
 from ..pricing import fmt_toman, to_int
 from ..shop import (REACTION_MAX, REACTION_MIN, STARS_MAX, STARS_MIN, Offer, Shop, ShopError, normalize_post_link,
                     normalize_username)
@@ -352,8 +353,13 @@ async def coupon_remove(cb: CallbackQuery, state: FSMContext, db: Database, user
 
 
 @router.message(Buy.coupon)
-async def coupon_value(message: Message, state: FSMContext, shop: Shop, db: Database, user: User):
+async def coupon_value(message: Message, state: FSMContext, shop: Shop, db: Database, user: User,
+                       limiter: RateLimiter | None = None):
     data = await state.get_data()
+    if not await allow(limiter, "coupon", user.id):
+        await state.set_state(Buy.confirm)
+        await message.answer("⏳ تلاش‌های کد تخفیف زیاد بود؛ چند دقیقه‌ی دیگر امتحان کنید.")
+        return
     offer = Offer(**data["offer"])
     code = (message.text or "").strip().upper()
     try:
@@ -369,10 +375,13 @@ async def coupon_value(message: Message, state: FSMContext, shop: Shop, db: Data
 
 @router.callback_query(Buy.confirm, Act.filter(F.name == "confirm"))
 async def confirm_pay(cb: CallbackQuery, state: FSMContext, shop: Shop, db: Database, user: User, is_admin: bool,
-                      bot: Bot, admins: Admins):
+                      bot: Bot, admins: Admins, limiter: RateLimiter | None = None):
     # بررسی و افزودن بدون await در میان، پس اتمیک است
     if user.id in _paying:
         await cb.answer("⏳ در حال پردازش…")
+        return
+    if not await allow(limiter, "purchase", user.id):
+        await cb.answer("⏳ تعداد خریدها در این دقیقه زیاد است؛ کمی صبر کنید.", show_alert=True)
         return
     _paying.add(user.id)
     try:

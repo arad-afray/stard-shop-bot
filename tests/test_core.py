@@ -70,7 +70,7 @@ async def shop(db, fake):
 def no_sleep(monkeypatch):
     async def fast(_):
         return None
-    monkeypatch.setattr("bot.stard_api.asyncio.sleep", fast)
+    monkeypatch.setattr("bot.stard_api._sleep", fast)
 
 
 # ---------- db ----------
