@@ -37,6 +37,12 @@ REACTION_MIN, REACTION_MAX = 1, 10_000
 COUPON_RE = re.compile(r"^[A-Za-z0-9_-]{3,32}$")
 # بخش‌هایی که از فهرست عمومی محصولات Stard فروخته می‌شوند (بخش ربات → slug دسته در Stard)
 CATALOG_CATEGORIES = {"nft": "nft", "username": "username", "number": "number"}
+# نام‌های ممکن هر بخش در API؛ نام واقعی از GET /categories پیدا می‌شود (مدیر هم می‌تواند slug:<بخش> را تنظیم کند)
+SLUG_CANDIDATES = {
+    "nft": ("nft", "nfts", "collectible", "collectibles", "collectible_gift", "collectible_gifts", "nft_gift"),
+    "username": ("username", "usernames", "collectible_username"),
+    "number": ("number", "numbers", "anonymous_number", "anonymous_numbers", "virtual_number", "phone_number"),
+}
 
 # خطاهایی که یعنی سفارش قطعاً ثبت نشده و پول باید برگردد
 DEFINITE_REJECT = {400, 402, 403, 404, 409, 422}
@@ -229,10 +235,31 @@ class Shop:
                 out.append(dict(g, sell_price=price))
         return out
 
+    async def _slug(self, category: str, api, test: bool) -> str:
+        """نام بخش در API: تنظیم مدیر ← کشف از GET /categories ← پیش‌فرض."""
+        manual = await self.db.get_setting(f"slug:{category}")
+        if manual:
+            return manual
+
+        async def discover():
+            try:
+                cats = await api.categories()
+            except Exception as e:
+                log.warning("categories lookup failed: %s", type(e).__name__)
+                return None
+            names = {str(c.get("slug") or c.get("id") or c.get("name") or "").lower(): c for c in cats
+                     if isinstance(c, dict)}
+            for cand in SLUG_CANDIDATES.get(category, (category,)):
+                if cand in names:
+                    return cand
+            return None
+        found = await self._cached(f"slug:{category}:{test}", discover, ttl=3600)
+        return found or CATALOG_CATEGORIES.get(category, category)
+
     async def catalog(self, category: str, *, user: User | None = None, test: bool = False) -> list[dict]:
         """محصولات NFT / یوزرنیم / شماره که از API قابل خریدند (قیمت ثابت)."""
-        slug = await self.db.get_setting(f"slug:{category}") or CATALOG_CATEGORIES[category]
         api = self.api_for(test)
+        slug = await self._slug(category, api, test)
 
         async def fetch():
             res = await api.products(category=slug, purchasable=True, sort="price_asc", limit=50)
@@ -252,7 +279,7 @@ class Shop:
         await self._ensure_enabled(category, user)
         api = self.api_for(test)
         p = await api.product(product_id)
-        slug = await self.db.get_setting(f"slug:{category}") or CATALOG_CATEGORIES.get(category, category)
+        slug = await self._slug(category, api, test) if category in CATALOG_CATEGORIES else category
         if p.get("category") not in (category, slug):
             raise ShopError("این محصول در این بخش نیست.")
         if not p.get("available") or not p.get("purchasable_via_api"):

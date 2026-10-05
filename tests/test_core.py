@@ -419,3 +419,16 @@ async def test_admin_refund_of_lost_response_order_does_not_double_spend(shop, d
     assert await shop.admin_refund(oid) is True
     assert len(fake.orders) == 1 and fake.orders["ord_test_1"]["status"] == "cancelled"
     assert (await db.get_user(1)).balance == 5_000_000
+
+
+async def test_catalog_slug_discovered_from_api(shop, fake):
+    # API واقعی ممکن است نام جمع داشته باشد؛ ربات آن را از /categories پیدا می‌کند
+    fake.products[7002]["category"] = "usernames"
+    items = await shop.catalog("username")
+    assert [p["id"] for p in items] == [7002]
+    await shop.features.set("username_shop", enabled=True)
+    offer = await shop.product_offer(7002, "username")
+    assert offer.product_id == 7002
+    # تنظیم دستی مدیر بر کشف خودکار مقدم است
+    await shop.db.set_setting("slug:nft", "nft")
+    assert [p["id"] for p in await shop.catalog("nft")] == [7001]

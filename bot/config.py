@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     db_pool_timeout: float = 60.0
     max_concurrent_purchases: int = 64
 
+    # پروکسی تلگرام (اختیاری): http://user:pass@host:port یا socks5://host:port
+    telegram_proxy: SecretStr | None = None
+
     # Redis (اختیاری ولی برای چند نمونه لازم): FSM مشترک، قفل و محدودیت نرخ
     redis_url: SecretStr | None = None
 
@@ -76,7 +79,8 @@ class Settings(BaseSettings):
             return v or None
         return v
 
-    @field_validator("database_url", "redis_url", "stard_webhook_secret", "github_token", mode="before")
+    @field_validator("database_url", "redis_url", "stard_webhook_secret", "github_token",
+                     "telegram_proxy", mode="before")
     @classmethod
     def _empty_secret(cls, v):
         if isinstance(v, str) and not v.strip():
@@ -99,7 +103,7 @@ class Settings(BaseSettings):
         """همه‌ی secretها برای فیلتر لاگ (redaction)."""
         out = []
         for v in (self.bot_token, self.stard_api_key, self.stard_webhook_secret, self.database_url, self.redis_url,
-                  self.github_token):
+                  self.github_token, self.telegram_proxy):
             if v is not None:
                 s = v.get_secret_value()
                 if s:

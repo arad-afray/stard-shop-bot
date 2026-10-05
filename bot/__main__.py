@@ -18,6 +18,7 @@ import sys
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramUnauthorizedError
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand
 
@@ -94,7 +95,13 @@ async def main() -> int:
     except StardError as e:
         log.error("Stard API check failed: %s %s — STARD_API_KEY را بررسی کنید", e.status, e.code)
 
-    bot = Bot(settings.bot_token.get_secret_value(), default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    session = None
+    if settings.telegram_proxy:
+        # پروکسی برای دسترسی به تلگرام (http://… یا socks5://…؛ socks نیاز به aiohttp-socks دارد)
+        from aiogram.client.session.aiohttp import AiohttpSession
+        session = AiohttpSession(proxy=settings.telegram_proxy.get_secret_value())
+    bot = Bot(settings.bot_token.get_secret_value(), session=session,
+              default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher(storage=_storage(services))
     extra = dict(services.extra)
     admins = await setup(dp, db=services.db, shop=services.shop, settings=settings, queue=services.queue,
@@ -151,9 +158,12 @@ async def main() -> int:
         if settings.role in ("all", "bot"):
             # اگر تلگرام همین لحظه در دسترس نباشد (مثلاً VPN قطع است) پردازه را نمی‌کشیم:
             # start_polling خودش با فاصله‌ی افزایشی دوباره تلاش می‌کند
-            for call in (bot.delete_webhook(drop_pending_updates=False), bot.set_my_commands(COMMANDS)):
+            for call in (lambda: bot.delete_webhook(drop_pending_updates=False), lambda: bot.set_my_commands(COMMANDS)):
                 try:
-                    await asyncio.wait_for(call, 30)
+                    await asyncio.wait_for(call(), 30)
+                except TelegramUnauthorizedError:
+                    log.error("BOT_TOKEN نامعتبر است (تلگرام آن را رد کرد) — توکن را از @BotFather بررسی کنید")
+                    raise
                 except Exception as e:
                     log.warning("Telegram not reachable yet (%s) — polling will keep retrying", type(e).__name__)
             polling = asyncio.create_task(_poll_forever(dp, bot))
@@ -167,6 +177,8 @@ async def main() -> int:
                 exit_code["code"] = 1
         else:
             await stop.wait()
+    except TelegramUnauthorizedError:
+        exit_code["code"] = 1
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
     finally:

@@ -41,6 +41,10 @@ cp .env.example .env && nano .env
 ```
 برای systemd: `ExecStart=/path/stard-shop-bot/run.sh` و `Restart=always`.
 
+## تلگرام فیلتر است؟
+
+در `.env` پروکسی بگذارید: `TELEGRAM_PROXY=socks5://127.0.0.1:1080` (یا `http://host:port`). فقط درخواست‌های تلگرام از پروکسی می‌روند.
+
 ## انتقال داده از SQLite به PostgreSQL
 
 1. روی نسخه‌ی فعلی (SQLite): پنل ← 🛠 سیستم ← 💾 Backup Manager ← Create Backup، و فایل را دانلود کنید.
