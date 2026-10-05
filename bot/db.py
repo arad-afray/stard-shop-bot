@@ -353,7 +353,7 @@ class Database:
     async def top_buyers(self, limit: int = 10) -> list[Row]:
         return await self.all(
             """SELECT u.id, u.username, u.first_name, COUNT(o.id) AS n, SUM(o.price) AS total
-               FROM orders o JOIN users u ON u.id = o.user_id WHERE o.status = 'completed'
+               FROM orders o JOIN users u ON u.id = o.user_id WHERE o.status = 'completed' AND o.is_test = 0
                GROUP BY u.id, u.username, u.first_name ORDER BY total DESC LIMIT :l""", {"l": limit})
 
     # ---------- موجودی (اتمیک) ----------
@@ -510,7 +510,10 @@ class Database:
             row = await self.one("SELECT user_id, price, coupon, category, product_id, quantity FROM orders "
                                  "WHERE id = :id", {"id": oid}, c=c)
             await self._x(c, "INSERT INTO refunds(order_id, user_id, amount, status, reason, admin_id, created_at, "
-                             "updated_at) VALUES(:o, :u, :a, 'completed', :r, :adm, :t, :t)",
+                             "updated_at) VALUES(:o, :u, :a, 'completed', :r, :adm, :t, :t) "
+                             "ON CONFLICT(order_id) DO UPDATE SET status = 'completed', amount = excluded.amount, "
+                             "error = NULL, updated_at = excluded.updated_at, "
+                             "admin_id = COALESCE(excluded.admin_id, refunds.admin_id)",
                           {"o": oid, "u": row["user_id"], "a": row["price"], "r": reason, "adm": admin_id, "t": t})
             await self._x(c, "UPDATE users SET balance = balance + :p WHERE id = :u",
                           {"p": row["price"], "u": row["user_id"]})
@@ -562,7 +565,7 @@ class Database:
 
     async def user_spent(self, uid: int) -> int:
         return await self.scalar("SELECT COALESCE(SUM(price), 0) FROM orders WHERE user_id = :u "
-                                 "AND status = 'completed'", {"u": uid})
+                                 "AND status = 'completed' AND is_test = 0", {"u": uid})
 
     async def user_order_stats(self, uid: int) -> Row:
         return await self.one(
@@ -691,12 +694,12 @@ class Database:
                  (SELECT COUNT(*) FROM users) AS users,
                  (SELECT COUNT(*) FROM users WHERE banned = 1) AS banned,
                  (SELECT COALESCE(SUM(balance), 0) FROM users) AS balances,
-                 (SELECT COUNT(*) FROM orders WHERE status = 'completed') AS done,
+                 (SELECT COUNT(*) FROM orders WHERE status = 'completed' AND is_test = 0) AS done,
                  (SELECT COUNT(*) FROM orders WHERE status IN ('new', 'pending', 'processing', 'manual')) AS active,
                  (SELECT COUNT(*) FROM orders WHERE status = 'manual') AS manual,
                  (SELECT COUNT(*) FROM orders WHERE refunded = 1) AS refunded,
-                 (SELECT COALESCE(SUM(price), 0) FROM orders WHERE status = 'completed') AS sales,
-                 (SELECT COALESCE(SUM(price - base_amount), 0) FROM orders WHERE status = 'completed') AS profit,
+                 (SELECT COALESCE(SUM(price), 0) FROM orders WHERE status = 'completed' AND is_test = 0) AS sales,
+                 (SELECT COALESCE(SUM(price - base_amount), 0) FROM orders WHERE status = 'completed' AND is_test = 0) AS profit,
                  (SELECT COALESCE(SUM(amount), 0) FROM topups WHERE status = 'approved') AS topups,
                  (SELECT COALESCE(SUM(amount), 0) FROM ledger WHERE kind = 'referral') AS referral,
                  (SELECT COALESCE(SUM(amount), 0) FROM ledger WHERE kind = 'reward') AS rewards,
@@ -708,17 +711,17 @@ class Database:
         r = await self.one(
             """SELECT
                  (SELECT COUNT(*) FROM users WHERE created_at >= :s) AS users,
-                 (SELECT COUNT(*) FROM orders WHERE status = 'completed' AND created_at >= :s) AS done,
-                 (SELECT COALESCE(SUM(price), 0) FROM orders WHERE status = 'completed' AND created_at >= :s) AS sales,
+                 (SELECT COUNT(*) FROM orders WHERE status = 'completed' AND is_test = 0 AND created_at >= :s) AS done,
+                 (SELECT COALESCE(SUM(price), 0) FROM orders WHERE status = 'completed' AND is_test = 0 AND created_at >= :s) AS sales,
                  (SELECT COALESCE(SUM(price - base_amount), 0) FROM orders
-                    WHERE status = 'completed' AND created_at >= :s) AS profit""", {"s": since})
+                    WHERE status = 'completed' AND is_test = 0 AND created_at >= :s) AS profit""", {"s": since})
         return {k: int(v or 0) for k, v in r.items()}
 
     async def category_stats(self) -> list[Row]:
         return await self.all(
             """SELECT category, COUNT(*) AS n, COALESCE(SUM(price), 0) AS sales,
                       COALESCE(SUM(price - base_amount), 0) AS profit
-               FROM orders WHERE status = 'completed' GROUP BY category ORDER BY sales DESC""")
+               FROM orders WHERE status = 'completed' AND is_test = 0 GROUP BY category ORDER BY sales DESC""")
 
     # ---------- پشتیبان (SQLite) ----------
     async def backup_sqlite(self, dest: str) -> None:

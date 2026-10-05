@@ -8,6 +8,9 @@ CATEGORIES = {
     "star_gift": "🎁 گیفت استارزی",
     "boost": "🚀 بوست کانال و گروه",
     "reaction": "❤️ ریکشن استارزی",
+    "nft": "🖼 گیفت NFT",
+    "username": "👤 یوزرنیم",
+    "number": "📱 شماره مجازی",
 }
 
 PERSIAN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
