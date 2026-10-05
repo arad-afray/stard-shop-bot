@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     database_path: str = "data/shop.db"
     db_pool_size: int = 10
     db_max_overflow: int = 20
+    db_pool_timeout: float = 60.0
+    max_concurrent_purchases: int = 64
 
     # Redis (اختیاری ولی برای چند نمونه لازم): FSM مشترک، قفل و محدودیت نرخ
     redis_url: SecretStr | None = None

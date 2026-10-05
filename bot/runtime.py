@@ -44,7 +44,8 @@ async def build_services(settings: Settings, *, api: StardClient | None = None, 
     if db is None:
         db = Database(settings.database_path,
                       url=settings.database_url.get_secret_value() if settings.database_url else None,
-                      pool_size=settings.db_pool_size, max_overflow=settings.db_max_overflow)
+                      pool_size=settings.db_pool_size, max_overflow=settings.db_max_overflow,
+                      pool_timeout=settings.db_pool_timeout)
         await db.connect()
     redis = None
     if settings.redis_url:
@@ -63,7 +64,7 @@ async def build_services(settings: Settings, *, api: StardClient | None = None, 
     locks = DistributedLock(db, settings.instance_id)
     limiter = RateLimiter(db, redis)
     shop = Shop(db, api, default_profit=settings.default_profit_percent, pay_currency=settings.stard_pay_currency,
-                queue=queue, locks=locks)
+                queue=queue, locks=locks, max_concurrent_purchases=settings.max_concurrent_purchases)
     return Services(settings=settings, db=db, api=api, shop=shop, queue=queue, locks=locks, limiter=limiter,
                     redis=redis)
 

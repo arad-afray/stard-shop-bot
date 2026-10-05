@@ -114,7 +114,7 @@ def build_url(database_url: str | None, database_path: str) -> str:
 
 class Database:
     def __init__(self, path: str = "data/shop.db", *, url: str | None = None, pool_size: int = 10,
-                 max_overflow: int = 20):
+                 max_overflow: int = 20, pool_timeout: float = 60.0):
         self._tmp: str | None = None
         if url is None and path == ":memory:":
             # پایگاه داده‌ی حافظه‌ای در SQLAlchemy بین اتصال‌ها مشترک نیست؛ برای تست یک فایل موقت می‌سازیم
@@ -123,7 +123,7 @@ class Database:
             path = self._tmp
         self.path = path
         self.url = build_url(url, path)
-        self.pool_size, self.max_overflow = pool_size, max_overflow
+        self.pool_size, self.max_overflow, self.pool_timeout = pool_size, max_overflow, pool_timeout
         self.engine: AsyncEngine | None = None
         self.is_sqlite = self.url.startswith("sqlite")
         # SQLite فقط یک نویسنده دارد؛ داخل پردازه نوشتن‌ها را صف می‌کنیم تا busy نشود.
@@ -145,7 +145,7 @@ class Database:
             _sqlite_events(self.engine)
         else:
             self.engine = create_async_engine(self.url, pool_size=self.pool_size, max_overflow=self.max_overflow,
-                                              pool_pre_ping=True, pool_recycle=1800)
+                                              pool_timeout=self.pool_timeout, pool_pre_ping=True, pool_recycle=1800)
         if create:
             from .migrations_runner import upgrade
             await upgrade(self)

@@ -521,6 +521,20 @@ async def _confirm_pay(cb: CallbackQuery, state: FSMContext, shop: Shop, db: Dat
         log.error("place order error: %s %s", e.status, e.code)
         await cb.message.answer(API_DOWN, reply_markup=main_menu(is_admin))
         return
+    except Exception:
+        # خطای پیش‌بینی‌نشده (مثلاً فشار بیش از حد روی پایگاه داده): به کاربر دقیق بگوییم سفارش ثبت شد یا نه
+        log.exception("place order failed unexpectedly")
+        try:
+            existing = await shop.order_for_checkout(data.get("checkout_id"))
+        except Exception:
+            existing = None
+        if existing:
+            await cb.message.answer(f"✅ سفارش #{existing['id']} ثبت شده و در حال پردازش است. نتیجه را همین‌جا "
+                                    "اطلاع می‌دهیم؛ لطفاً دوباره خرید نکنید.", reply_markup=main_menu(is_admin))
+        else:
+            await cb.message.answer("⚠️ سیستم الان شلوغ است و سفارش ثبت نشد؛ هیچ مبلغی کسر نشده است. چند لحظه دیگر "
+                                    "دوباره تلاش کنید.", reply_markup=main_menu(is_admin))
+        return
     o = await db.get_order(oid)
     u = await db.get_user(user.id)
     tail = ("پشتیبانی به‌زودی سفارش را انجام می‌دهد و نتیجه را همین‌جا اطلاع می‌دهیم."

@@ -13,6 +13,7 @@ Test Mode: سفارش‌های test با SimulatedStardClient انجام می‌
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -88,7 +89,7 @@ def normalize_post_link(text: str) -> str | None:
 class Shop:
     def __init__(self, db: Database, api: StardClient, *, default_profit: float = 10.0,
                  pay_currency: str | None = None, queue=None, locks=None, features: Features | None = None,
-                 commerce: Commerce | None = None, simulator: Any = None):
+                 commerce: Commerce | None = None, simulator: Any = None, max_concurrent_purchases: int = 64):
         self.db = db
         self.api = api
         self.default_profit = default_profit
@@ -102,6 +103,9 @@ class Shop:
             simulator = SimulatedStardClient(db)
         self.simulator = simulator
         self._cache: dict[str, tuple[float, Any]] = {}
+        # فشار برگشتی: در هجوم ناگهانی خرید، درخواست‌ها در صف حافظه منتظر می‌مانند به جای اینکه Connection Pool
+        # پایگاه داده را خالی کنند و با timeout شکست بخورند
+        self._slots = asyncio.Semaphore(max(1, max_concurrent_purchases))
 
     async def _cached(self, key: str, fetch: Callable[[], Awaitable[Any]], ttl: float = CACHE_TTL) -> Any:
         hit = self._cache.get(key)
@@ -338,6 +342,16 @@ class Shop:
         InsufficientBalance اگر موجودی کم باشد؛ ShopError اگر خرید مجاز نباشد، Stard سفارش را رد کند
         (پول برگشته) یا کد تخفیف دیگر معتبر نباشد (پولی کسر نشده).
         """
+        async with self._slots:
+            return await self._place_order(user_id, offer, recipient, gift_message, coupon, checkout_id, user, is_admin)
+
+    async def order_for_checkout(self, checkout_id: str | None) -> dict | None:
+        """سفارشی که با این پیش‌فاکتور ساخته شده (برای پاسخ درست به کاربر بعد از خطای غیرمنتظره)."""
+        if not checkout_id:
+            return None
+        return await self.db.one("SELECT * FROM orders WHERE checkout_id = :c", {"c": checkout_id})
+
+    async def _place_order(self, user_id, offer, recipient, gift_message, coupon, checkout_id, user, is_admin) -> int:
         if user is not None:
             try:
                 await self.commerce.check_purchase(user, offer.category, offer.product_id, offer.quantity,
