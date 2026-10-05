@@ -3,6 +3,8 @@ import datetime as dt
 import itertools
 
 import pytest
+
+from tests.conftest import new_db, requires_sqlite
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.base import BaseSession
@@ -70,8 +72,7 @@ def no_unhandled_errors(caplog):
 
 @pytest.fixture
 async def env():
-    db = Database(":memory:")
-    await db.connect()
+    db = await new_db()
     fake = FakeStard()
     api = StardClient("sk_test_ok", transport=fake.transport())
     shop = Shop(db, api, default_profit=10)

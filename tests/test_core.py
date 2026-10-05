@@ -3,6 +3,8 @@ import asyncio
 import httpx
 import pytest
 
+from tests.conftest import new_db, requires_sqlite
+
 from bot.db import Database, InsufficientBalance
 from bot.handlers.prices import detect
 from bot.pricing import apply_discount, apply_profit, to_float, to_int
@@ -45,8 +47,7 @@ def test_normalize_username():
 # ---------- fixtures ----------
 @pytest.fixture
 async def db():
-    d = Database(":memory:")
-    await d.connect()
+    d = await new_db()
     await d.upsert_user(1, "alice", "Alice")
     yield d
     await d.close()
@@ -83,7 +84,8 @@ async def test_debit_is_atomic_under_concurrency(db):
 
 
 async def test_topup_resolves_once(db):
-    tid = await db.create_topup(1, 50_000, "photo")
+    tid, created = await db.create_topup(1, 50_000, "photo", "uniq1")
+    assert created and await db.create_topup(1, 50_000, "photo", "uniq1") == (tid, False)  # رسید تکراری
     assert await db.resolve_topup(tid, 99, True) is not None
     assert await db.resolve_topup(tid, 98, True) is None
     assert (await db.get_user(1)).balance == 50_000
@@ -254,6 +256,7 @@ def test_number_parsing():
     assert to_float("۱۲/۵") == 12.5 and to_float("10%") == 10 and to_float("nan") is None and to_float("x") is None
 
 
+@requires_sqlite
 async def test_migrates_v1_database(tmp_path):
     import aiosqlite
     path = str(tmp_path / "old.db")
@@ -391,6 +394,7 @@ async def test_settings_cache_consistent(db):
     assert await db.get_setting("a", "x") == "x"
 
 
+@requires_sqlite
 async def test_backup(db, tmp_path):
     await db.credit(1, 777, "topup")
     dest = str(tmp_path / "b.db")

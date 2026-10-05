@@ -22,16 +22,24 @@ class Admins:
     def all(self) -> list[int]:
         return sorted(self.owners | self.extra)
 
-    async def add(self, uid: int) -> bool:
+    async def add(self, uid: int, by: int | None = None) -> bool:
+        await self.load()
         if self.is_admin(uid):
             return False
         self.extra.add(uid)
         await self.db.set_json("admins", sorted(self.extra))
+        await self.db.audit(admin_id=by, action="admin_add", user_id=uid)
         return True
 
-    async def remove(self, uid: int) -> bool:
+    async def remove(self, uid: int, by: int | None = None) -> bool:
+        await self.load()
         if uid not in self.extra:
             return False
         self.extra.discard(uid)
         await self.db.set_json("admins", sorted(self.extra))
+        await self.db.audit(admin_id=by, action="admin_remove", user_id=uid)
         return True
+
+    async def refresh(self) -> None:
+        """برای چند نمونه: فهرست مدیرها دوره‌ای از پایگاه داده خوانده می‌شود."""
+        await self.load()

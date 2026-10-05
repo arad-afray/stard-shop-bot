@@ -70,7 +70,11 @@ async def topup_receipt(message: Message, state: FSMContext, db: Database, bot: 
         return
     await state.clear()
     photo_id = message.photo[-1].file_id
-    tid = await db.create_topup(user.id, amount, photo_id)
+    tid, created = await db.create_topup(user.id, amount, photo_id, message.photo[-1].file_unique_id)
+    if not created:
+        await message.answer(f"ℹ️ این رسید قبلاً با شماره‌ی #{tid} ثبت شده است و در حال بررسی است.",
+                             reply_markup=main_menu(is_admin))
+        return
     await message.answer(
         f"✅ رسید شما (درخواست #{tid}) ثبت شد و پس از بررسی، موجودی شارژ می‌شود.",
         reply_markup=main_menu(is_admin))

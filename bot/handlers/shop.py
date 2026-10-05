@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from dataclasses import asdict
 from html import escape
 
@@ -28,8 +29,8 @@ router = Router(name="shop")
 # quote استارد ۲ دقیقه اعتبار دارد؛ کمی زودتر تازه‌اش می‌کنیم
 QUOTE_TTL = 100
 
-# کاربرانی که پرداختشان در جریان است. aiogram آپدیت‌ها را هم‌زمان پردازش می‌کند،
-# پس بدون این، دو بار زدن سریع «تأیید» می‌تواند دو سفارش بسازد.
+# مسیر سریع داخل پردازه برای کلیک‌های پشت سر هم. محافظ اصلی در برابر خرید تکراری (حتی با چند نمونه‌ی
+# ربات یا بعد از ری‌استارت) checkout_id یکتای هر پیش‌فاکتور است که در پایگاه داده UNIQUE است.
 _paying: set[int] = set()
 
 
@@ -304,6 +305,8 @@ async def gift_message(message: Message, state: FSMContext, user: User):
 async def _show_confirm(message: Message, state: FSMContext, user: User, note: str = ""):
     data = await state.get_data()
     o = data["offer"]
+    if not data.get("checkout_id"):
+        await state.update_data(checkout_id=uuid.uuid4().hex)
     await state.set_state(Buy.confirm)
     price = data.get("final_price") or o["price"]
     msg = f"\n💌 پیام: {escape(data['gift_message'])}" if data.get("gift_message") else ""
@@ -426,7 +429,8 @@ async def _confirm_pay(cb: CallbackQuery, state: FSMContext, shop: Shop, db: Dat
 
     await state.clear()
     try:
-        oid = await shop.place_order(user.id, offer, data["recipient"], data.get("gift_message"), data.get("coupon"))
+        oid = await shop.place_order(user.id, offer, data["recipient"], data.get("gift_message"), data.get("coupon"),
+                                     checkout_id=data.get("checkout_id"))
     except InsufficientBalance:
         u = await db.get_user(user.id)
         await cb.message.answer(

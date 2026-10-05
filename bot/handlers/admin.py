@@ -196,17 +196,20 @@ async def cb_profit_set(cb: CallbackQuery, callback_data: Adm, state: FSMContext
 
 
 @router.message(AdminForm.profit)
-async def profit_value(message: Message, state: FSMContext, shop: Shop):
+async def profit_value(message: Message, state: FSMContext, shop: Shop, db: Database):
     value = to_float(message.text)
     if value is None:
         await message.answer("❗️ یک عدد بفرستید، مثلاً 10")
         return
     cat = (await state.get_data()).get("cat", "global")
     try:
+        old = await shop.get_profit(None if cat == "global" else cat)
         await shop.set_profit(value, None if cat == "global" else cat)
     except ShopError as e:
         await message.answer(f"❗️ {e}")
         return
+    await db.audit(admin_id=message.from_user.id, action="profit_set", ref=cat, before={"percent": old},
+                   after={"percent": value})
     await state.clear()
     await message.answer(f"✅ سود روی {value:g}% تنظیم شد.", reply_markup=main_menu(True))
     text, kb = await _profit_view(shop)
@@ -319,7 +322,7 @@ async def cb_ban(cb: CallbackQuery, callback_data: Adm, db: Database, admins: Ad
     if admins.is_admin(uid):
         await cb.answer("مدیر را نمی‌شود مسدود کرد.", show_alert=True)
         return
-    await db.set_banned(uid, not u.banned)
+    await db.set_banned(uid, not u.banned, admin_id=cb.from_user.id, reason="manual")
     text, kb = await _user_card(db, uid)
     await edit_or_send(cb.message, text, kb)
     await cb.answer("انجام شد")
@@ -402,9 +405,9 @@ async def balance_value(message: Message, state: FSMContext, db: Database, bot: 
     uid = data["uid"]
     try:
         if data["sign"] > 0:
-            new = await db.credit(uid, amount, "admin", f"by:{message.from_user.id}")
+            new = await db.credit(uid, amount, "admin", f"by:{message.from_user.id}", admin_id=message.from_user.id)
         else:
-            new = await db.debit(uid, amount, "admin", f"by:{message.from_user.id}")
+            new = await db.debit(uid, amount, "admin", f"by:{message.from_user.id}", admin_id=message.from_user.id)
     except InsufficientBalance:
         await message.answer("❗️ موجودی کاربر کمتر از این مبلغ است.")
         return
@@ -531,7 +534,7 @@ async def cb_order_sync(cb: CallbackQuery, callback_data: Adm, db: Database, sho
 @router.callback_query(Adm.filter(F.name == "o_done"))
 async def cb_order_done(cb: CallbackQuery, callback_data: Adm, db: Database, shop: Shop, bot: Bot):
     oid = to_int(callback_data.arg) or 0
-    if not await shop.complete_manual(oid):
+    if not await shop.complete_manual(oid, admin_id=cb.from_user.id):
         await cb.answer("این سفارش قبلاً بررسی شده است.", show_alert=True)
         await drop_markup(cb.message)
         return
@@ -545,7 +548,7 @@ async def cb_order_done(cb: CallbackQuery, callback_data: Adm, db: Database, sho
 async def cb_order_refund(cb: CallbackQuery, callback_data: Adm, shop: Shop, bot: Bot):
     oid = to_int(callback_data.arg) or 0
     try:
-        ok = await shop.admin_refund(oid, f"admin:{cb.from_user.id}")
+        ok = await shop.admin_refund(oid, f"admin:{cb.from_user.id}", admin_id=cb.from_user.id)
     except ShopError as e:
         await cb.answer(str(e)[:190], show_alert=True)
         return
@@ -724,7 +727,7 @@ async def cb_coupons(cb: CallbackQuery, db: Database):
 
 @router.callback_query(Adm.filter(F.name == "cp_rm"))
 async def cb_coupon_remove(cb: CallbackQuery, callback_data: Adm, db: Database):
-    await db.delete_coupon(callback_data.arg)
+    await db.delete_coupon(callback_data.arg, admin_id=cb.from_user.id)
     text, kb = await _coupons_view(db)
     await edit_or_send(cb.message, text, kb)
     await cb.answer("حذف شد")
@@ -748,7 +751,7 @@ async def coupon_create(message: Message, state: FSMContext, db: Database):
     if not COUPON_RE.match(code) or pct is None or not 0 < pct <= 100 or max_uses is None:
         await message.answer("❗️ نامعتبر. کد ۳ تا ۳۲ حرف انگلیسی/عدد، درصد بین ۰ تا ۱۰۰. مثال: YALDA 15 100")
         return
-    if not await db.create_coupon(code, pct, max_uses):
+    if not await db.create_coupon(code, pct, max_uses, admin_id=message.from_user.id):
         await message.answer("❗️ این کد قبلاً ساخته شده است.")
         return
     await state.clear()
@@ -958,7 +961,11 @@ async def setting_value(message: Message, state: FSMContext, db: Database, bot: 
             await message.answer(f"❗️ ارسال به این کانال ممکن نشد (ربات ادمین است؟): {escape(str(e))[:150]}")
             return
         value = str(target)
+    old = await db.get_setting(key)
     await db.set_setting(key, value[:2000])
+    await db.audit(admin_id=message.from_user.id, action="setting_set", ref=key,
+                   before=None if key == "card_number" and old is None else {"value": old},
+                   after={"value": value[:200]})
     await state.clear()
     await message.answer(f"✅ «{SETTINGS[key]}» ذخیره شد.", reply_markup=main_menu(True))
 
@@ -1012,7 +1019,7 @@ async def cb_admin_remove(cb: CallbackQuery, callback_data: Adm, admins: Admins,
     if not is_owner:
         await cb.answer("فقط مالک ربات.", show_alert=True)
         return
-    await admins.remove(to_int(callback_data.arg) or 0)
+    await admins.remove(to_int(callback_data.arg) or 0, by=cb.from_user.id)
     text, kb = await _admins_view(admins, db)
     await edit_or_send(cb.message, text, kb)
     await cb.answer("حذف شد")
@@ -1041,8 +1048,8 @@ async def admin_add(message: Message, state: FSMContext, admins: Admins, db: Dat
         await message.answer("❗️ کاربر پیدا نشد. اول باید ربات را استارت کند.")
         return
     await state.clear()
-    if await admins.add(u.id):
-        await db.set_banned(u.id, False)
+    if await admins.add(u.id, by=message.from_user.id):
+        await db.set_banned(u.id, False, admin_id=message.from_user.id, reason="promoted to admin")
         await message.answer(f"✅ <code>{u.id}</code> مدیر شد.", reply_markup=main_menu(True))
         await notify.safe_send(bot, u.id, "👮 شما مدیر ربات شدید. /admin را بزنید.")
     else:

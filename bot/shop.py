@@ -236,7 +236,8 @@ class Shop:
 
     # ---------- سفارش ----------
     async def place_order(self, user_id: int, offer: Offer, recipient: str | None,
-                          gift_message: str | None = None, coupon: str | None = None) -> int:
+                          gift_message: str | None = None, coupon: str | None = None,
+                          checkout_id: str | None = None) -> int:
         """کسر موجودی و ثبت سفارش. شناسه‌ی سفارش محلی را برمی‌گرداند.
 
         InsufficientBalance اگر موجودی کم باشد؛ ShopError اگر Stard سفارش را رد کند (پول برگشته)
@@ -252,7 +253,8 @@ class Shop:
                 user_id=user_id, type_=offer.type, category=offer.category, product_id=offer.product_id,
                 title=offer.title, quantity=offer.quantity, recipient=recipient, gift_message=gift_message,
                 quote_id=offer.quote_id, base_amount=offer.base_amount, price=price, duration=offer.duration,
-                status="manual" if manual else "new", coupon=coupon, discount=discount)
+                status="manual" if manual else "new", coupon=coupon, discount=discount,
+                checkout_id=checkout_id)
         except CouponInvalid as e:
             raise ShopError("کد تخفیف دیگر معتبر نیست. دوباره بدون کد یا با کد دیگر تلاش کنید.") from e
         if manual:
@@ -318,10 +320,10 @@ class Shop:
         return (old, cur) if cur != old else None
 
     # ---------- عملیات مدیر ----------
-    async def complete_manual(self, oid: int) -> bool:
-        return await self.db.set_order_status(oid, "completed", only_from=("manual",))
+    async def complete_manual(self, oid: int, admin_id: int | None = None) -> bool:
+        return await self.db.set_order_status(oid, "completed", only_from=("manual",), admin_id=admin_id)
 
-    async def admin_refund(self, oid: int, reason: str = "admin") -> bool:
+    async def admin_refund(self, oid: int, reason: str = "admin", admin_id: int | None = None) -> bool:
         """برگشت پول دستی. فقط برای سفارش دستی یا سفارشی که هنوز در Stard ثبت نشده (یا در Stard لغو شده)."""
         o = await self.db.get_order(oid)
         if o is None or o["refunded"] or o["status"] == "completed":
@@ -341,7 +343,7 @@ class Shop:
                 await self.api.cancel_order(o["stard_ref"])
             except StardError as e:
                 raise ShopError(f"لغو در Stard ممکن نشد ({e.code}). سفارش احتمالاً شروع شده است.") from e
-        return await self.db.refund_order(oid, "cancelled", reason)
+        return await self.db.refund_order(oid, "cancelled", reason, admin_id=admin_id)
 
     async def referral_percent(self) -> float:
         try:
