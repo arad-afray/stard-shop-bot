@@ -7,9 +7,10 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.base import BaseSession
 from aiogram.exceptions import TelegramForbiddenError
 from aiogram.methods import TelegramMethod
-from aiogram.types import Chat, Message, User as TgUser
+from aiogram.types import CallbackQuery, Chat, Message, Update, User as TgUser
 
 ids = itertools.count(1)
+ADMIN, CUSTOMER = 100, 200
 
 
 def tg_user(uid):
@@ -62,3 +63,24 @@ class RecordingSession(BaseSession):
 def make_bot(session=None) -> tuple[Bot, "RecordingSession"]:
     session = session or RecordingSession()
     return Bot("42:TEST", session=session, default=DefaultBotProperties(parse_mode="HTML")), session
+
+
+async def send(dp, bot, uid, text=None, photo=None, chat=None):
+    msg = Message(message_id=next(ids), date=dt.datetime.now(), chat=chat or Chat(id=uid, type="private"),
+                  from_user=tg_user(uid), text=text, photo=photo)
+    await dp.feed_update(bot, Update(update_id=next(ids), message=msg))
+
+
+async def click(dp, bot, uid, data):
+    msg = Message(message_id=next(ids), date=dt.datetime.now(), chat=Chat(id=uid, type="private"), text="x",
+                  from_user=tg_user(42))
+    cb = CallbackQuery(id=str(next(ids)), from_user=tg_user(uid), chat_instance="c", message=msg,
+                       data=data.pack())
+    await dp.feed_update(bot, Update(update_id=next(ids), callback_query=cb))
+
+
+async def click_raw(dp, bot, uid, data: str):
+    msg = Message(message_id=next(ids), date=dt.datetime.now(), chat=Chat(id=uid, type="private"), text="x",
+                  from_user=tg_user(42))
+    cb = CallbackQuery(id=str(next(ids)), from_user=tg_user(uid), chat_instance="c", message=msg, data=data)
+    await dp.feed_update(bot, Update(update_id=next(ids), callback_query=cb))

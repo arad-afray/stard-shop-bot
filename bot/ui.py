@@ -127,14 +127,42 @@ def join_menu(channels: list[dict]) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-SHOP_NAV = {"stars": "stars", "premium": "premium", "star_gift": "gifts", "boost": "boost", "reaction": "reaction"}
+SHOP_NAV = {"stars": "stars", "premium": "premium", "star_gift": "gifts", "boost": "boost", "reaction": "reaction",
+            "nft": "nft", "username": "username", "number": "number"}
 
 
-def shop_menu(enabled: list[str]) -> InlineKeyboardMarkup:
+def shop_menu(buttons: list) -> InlineKeyboardMarkup:
+    """buttons: [بخش] یا [(بخش، فعال؟)] به ترتیب مدیریت دکمه‌ها؛ بخش غیرفعال با 🔒 نمایش داده می‌شود."""
     b = InlineKeyboardBuilder()
-    for cat in enabled:
-        b.button(text=CATEGORIES[cat], callback_data=Nav(to=SHOP_NAV[cat]))
+    for item in buttons:
+        cat, ok = (item, True) if isinstance(item, str) else item
+        b.button(text=CATEGORIES[cat] + ("" if ok else " 🔒"), callback_data=Nav(to=SHOP_NAV[cat]))
     b.adjust(1)
+    return b.as_markup()
+
+
+class CatPage(CallbackData, prefix="cp"):
+    cat: str                    # nft | username | number
+    page: int
+
+
+CATALOG_PER_PAGE = 8
+
+
+def catalog_menu(cat: str, items: list[dict], page: int) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    for p in items[page * CATALOG_PER_PAGE:(page + 1) * CATALOG_PER_PAGE]:
+        b.button(text=f"{p['name']} — {fmt_toman(p['sell_price'])}", callback_data=PickProduct(cat=cat, pid=p["id"]))
+    b.adjust(1)
+    nav = InlineKeyboardBuilder()
+    if page > 0:
+        nav.button(text="◀️ قبلی", callback_data=CatPage(cat=cat, page=page - 1))
+    if (page + 1) * CATALOG_PER_PAGE < len(items):
+        nav.button(text="بعدی ▶️", callback_data=CatPage(cat=cat, page=page + 1))
+    b.attach(nav)
+    back = InlineKeyboardBuilder()
+    back.button(text="🔙 بازگشت", callback_data=Nav(to="shop"))
+    b.attach(back)
     return b.as_markup()
 
 
@@ -246,28 +274,76 @@ def manual_order_menu(oid: int) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def admin_menu(shop_open: bool, is_test: bool, is_owner: bool) -> InlineKeyboardMarkup:
+class Op(CallbackData, prefix="op"):
+    """بخش سیستم (عملیات)."""
+    a: str
+    v: str = ""
+
+
+class SA(CallbackData, prefix="sa"):
+    """مدیریت فروشگاه و بازاریابی."""
+    a: str
+    v: str = ""
+
+
+class Fn(CallbackData, prefix="fn"):
+    """بخش مالی."""
+    a: str
+    v: str = ""
+
+
+def admin_menu(shop_open: bool, is_test: bool, is_owner: bool, *, maintenance: bool = False,
+               pending_topups: int = 0, manual: int = 0) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
+    b.button(text="🔄 به‌روزرسانی داشبورد", callback_data=Adm(name="home"))
     b.button(text="📊 آمار", callback_data=Adm(name="stats"))
+    b.button(text="💵 مالی", callback_data=Fn(a="menu"))
+    b.button(text="👥 کاربران", callback_data=Adm(name="user"))
+    b.button(text="🧾 سفارش‌ها" + (f" ({manual})" if manual else ""), callback_data=Adm(name="orders"))
+    b.button(text="💳 شارژها" + (f" ({pending_topups})" if pending_topups else ""), callback_data=Adm(name="topups"))
     b.button(text="💰 درصد سود", callback_data=Adm(name="profit"))
-    b.button(text="💳 شارژهای در انتظار", callback_data=Adm(name="topups"))
-    b.button(text="👥 مدیریت کاربر", callback_data=Adm(name="user"))
-    b.button(text="🧾 سفارش‌ها", callback_data=Adm(name="orders"))
-    b.button(text="🗂 بخش‌های فروشگاه", callback_data=Adm(name="cats"))
-    b.button(text="📣 جوین اجباری", callback_data=Adm(name="join"))
-    b.button(text="🎟 کد تخفیف", callback_data=Adm(name="coupons"))
-    b.button(text="🎁 زیرمجموعه‌گیری", callback_data=Adm(name="ref"))
-    b.button(text="💹 قیمت در گروه", callback_data=Adm(name="group"))
-    b.button(text="🏦 کیف پول Stard", callback_data=Adm(name="wallet"))
-    b.button(text="📢 پیام همگانی", callback_data=Adm(name="broadcast"))
-    b.button(text="🛠 تنظیمات", callback_data=Adm(name="settings"))
-    b.button(text="💾 پشتیبان", callback_data=Adm(name="backup"))
+    b.button(text="🛍 مدیریت فروشگاه", callback_data=SA(a="menu"))
+    b.button(text="📣 بازاریابی", callback_data=SA(a="mkt"))
+    b.button(text="🛠 سیستم", callback_data=Op(a="menu"))
+    b.button(text="⚙️ تنظیمات", callback_data=Adm(name="settings"))
     if is_owner:
         b.button(text="👮 مدیرها", callback_data=Adm(name="admins"))
+    b.button(text="🧹 خاموش کردن Maintenance" if maintenance else "🧹 Maintenance", callback_data=Op(a="maint"))
     b.button(text="🔴 بستن فروشگاه" if shop_open else "🟢 باز کردن فروشگاه", callback_data=Adm(name="toggle"))
     if is_test:
         b.button(text="🧪 شبیه‌سازی سفارش (test)", callback_data=Adm(name="sim"))
-    b.adjust(2)
+    b.adjust(1, 2)
+    return b.as_markup()
+
+
+def quick_actions() -> InlineKeyboardBuilder:
+    """دکمه‌های سریع مرکز فرمان."""
+    b = InlineKeyboardBuilder()
+    b.button(text="🔄 Update", callback_data=Op(a="upd"))
+    b.button(text="💾 Backup", callback_data=Op(a="bk"))
+    b.button(text="🩺 Health Check", callback_data=Op(a="hc"))
+    b.button(text="📜 Logs", callback_data=Op(a="logs"))
+    b.button(text="🧪 Diagnostics", callback_data=Op(a="diag"))
+    b.button(text="🧹 Maintenance", callback_data=Op(a="maint"))
+    b.adjust(3)
+    return b
+
+
+def section(buttons: list[tuple[str, object]], back: object | None = None, width: int = 2) -> InlineKeyboardMarkup:
+    """منوی یک بخش: دکمه‌ها + بازگشت."""
+    b = InlineKeyboardBuilder()
+    for text, cd in buttons:
+        b.button(text=text, callback_data=cd)
+    b.button(text="🔙 بازگشت", callback_data=back or Adm(name="home"))
+    b.adjust(*([width] * ((len(buttons) + width - 1) // width)), 1)
+    return b.as_markup()
+
+
+def back_to(cd: object, extra: InlineKeyboardBuilder | None = None, text: str = "🔙 بازگشت") -> InlineKeyboardMarkup:
+    b = extra or InlineKeyboardBuilder()
+    back = InlineKeyboardBuilder()
+    back.button(text=text, callback_data=cd)
+    b.attach(back)
     return b.as_markup()
 
 

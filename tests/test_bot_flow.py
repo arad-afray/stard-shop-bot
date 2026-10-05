@@ -1,64 +1,11 @@
 """تست سرتاسری: آپدیت‌های واقعی تلگرام از Dispatcher عبور می‌کنند (بدون اینترنت)."""
-import datetime as dt
-
 import pytest
+from aiogram.types import Chat
 
-from tests.conftest import new_db
-from aiogram import Bot, Dispatcher
-from aiogram.client.default import DefaultBotProperties
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import CallbackQuery, Chat, Message, Update
-
-from bot.config import Settings
-from bot.app import setup
-from bot.locks import DistributedLock, RateLimiter
-from bot.queue import JobQueue
-from bot.shop import Shop
-from bot.stard_api import StardClient
 from bot.ui import JOIN_CHECK, Act, Adm, BoostDur, BoostQty, Nav, ReactQty, StarsQty
-from tests.fake_stard import FakeStard
-from tests.helpers import RecordingSession, ids, tg_user
+from tests.helpers import ADMIN, CUSTOMER, click, click_raw, send
 
-ADMIN, CUSTOMER = 100, 200
-
-
-@pytest.fixture(autouse=True)
-def no_unhandled_errors(caplog):
-    """هر خطای مدیریت‌نشده در هندلرها تست را رد می‌کند (حتی اگر error handler آن را بگیرد)."""
-    yield
-    errors = [r for r in caplog.records if r.levelname in ("ERROR", "CRITICAL") and r.name.startswith(("bot", "aiogram"))]
-    assert not errors, [r.getMessage() for r in errors]
-
-
-@pytest.fixture
-async def env():
-    db = await new_db()
-    fake = FakeStard()
-    api = StardClient("sk_test_ok", transport=fake.transport())
-    queue, locks = JobQueue(db, "test"), DistributedLock(db, "test")
-    shop = Shop(db, api, default_profit=10, queue=queue, locks=locks)
-    settings = Settings(bot_token="1:x", stard_api_key="sk_test_ok", admin_ids=[ADMIN])
-    session = RecordingSession()
-    bot = Bot("42:TEST", session=session, default=DefaultBotProperties(parse_mode="HTML"))
-    dp = Dispatcher(storage=MemoryStorage())
-    await setup(dp, db=db, shop=shop, settings=settings, queue=queue, locks=locks, limiter=RateLimiter(db))
-    yield dp, bot, session, db, fake
-    await api.close()
-    await db.close()
-
-
-async def send(dp, bot, uid, text=None, photo=None, chat=None):
-    msg = Message(message_id=next(ids), date=dt.datetime.now(), chat=chat or Chat(id=uid, type="private"),
-                  from_user=tg_user(uid), text=text, photo=photo)
-    await dp.feed_update(bot, Update(update_id=next(ids), message=msg))
-
-
-async def click(dp, bot, uid, data):
-    msg = Message(message_id=next(ids), date=dt.datetime.now(), chat=Chat(id=uid, type="private"), text="x",
-                  from_user=tg_user(42))
-    cb = CallbackQuery(id=str(next(ids)), from_user=tg_user(uid), chat_instance="c", message=msg,
-                       data=data.pack())
-    await dp.feed_update(bot, Update(update_id=next(ids), callback_query=cb))
+pytestmark = pytest.mark.usefixtures("no_unhandled_errors")
 
 
 async def test_full_purchase_flow(env):
@@ -114,9 +61,9 @@ async def test_admin_sets_profit_and_bans(env):
     await send(dp, bot, ADMIN, "/start")
     await send(dp, bot, CUSTOMER, "/start")
     await send(dp, bot, CUSTOMER, "/admin")
-    assert "پنل مدیریت" not in session.texts()[-1]
+    assert "COMMAND CENTER" not in session.texts()[-1]
     await send(dp, bot, ADMIN, "⚙️ پنل مدیریت")
-    assert "پنل مدیریت" in session.texts()[-1]
+    assert "COMMAND CENTER" in session.texts()[-1]
     await click(dp, bot, ADMIN, Adm(name="pset", arg="stars"))
     await send(dp, bot, ADMIN, "۲۵")
     assert await db.get_setting("profit:stars") == "25.0"
@@ -142,13 +89,6 @@ async def test_double_confirm_creates_one_order(env):
     await asyncio.gather(*(click(dp, bot, CUSTOMER, Act(name="confirm")) for _ in range(5)))
     assert len(fake.orders) == 1
     assert len(await db.recent_orders()) == 1
-
-
-async def click_raw(dp, bot, uid, data: str):
-    msg = Message(message_id=next(ids), date=dt.datetime.now(), chat=Chat(id=uid, type="private"), text="x",
-                  from_user=tg_user(42))
-    cb = CallbackQuery(id=str(next(ids)), from_user=tg_user(uid), chat_instance="c", message=msg, data=data)
-    await dp.feed_update(bot, Update(update_id=next(ids), callback_query=cb))
 
 
 async def test_boost_purchase_flow(env):
@@ -299,7 +239,7 @@ async def test_owner_adds_admin(env):
     await click(dp, bot, ADMIN, Adm(name="adm_add"))
     await send(dp, bot, ADMIN, str(CUSTOMER))
     await send(dp, bot, CUSTOMER, "/admin")
-    assert "پنل مدیریت" in session.texts()[-1]
+    assert "COMMAND CENTER" in session.texts()[-1]
     # مدیر غیرمالک نمی‌تواند مدیر اضافه کند
     await click(dp, bot, CUSTOMER, Adm(name="adm_add"))
     assert "فقط مالک" in session.alerts()[-1]

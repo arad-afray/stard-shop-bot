@@ -2,20 +2,40 @@
 from __future__ import annotations
 
 import logging
+from html import escape
 from typing import Any
 
 from aiogram import BaseMiddleware, Dispatcher, F, Router
-from aiogram.types import ErrorEvent
+from aiogram.types import CallbackQuery, ErrorEvent, Message
 
 from .admins import Admins
 from .config import Settings
 from .db import Database
-from .handlers import admin, prices, shop as shop_handlers, topup, user
+from .handlers import admin, admin_shop, finance, ops, prices, shop as shop_handlers, topup, user
 from .logging_setup import correlation_id, redact
 from .middlewares import JoinChecker, JoinMiddleware, ThrottleMiddleware, UserMiddleware
 from .shop import Shop
 
 log = logging.getLogger(__name__)
+
+
+class MaintenanceMiddleware(BaseMiddleware):
+    """در حالت Maintenance کاربران عادی فقط پیام نگهداری را می‌بینند؛ مدیرها همه‌چیز را."""
+
+    def __init__(self, shop: Shop):
+        self.shop = shop
+
+    async def __call__(self, handler, event, data):
+        if "user" not in data or data.get("is_admin"):
+            return await handler(event, data)
+        on, msg = await self.shop.maintenance()
+        if not on:
+            return await handler(event, data)
+        if isinstance(event, Message):
+            await event.answer(escape(msg))
+        elif isinstance(event, CallbackQuery):
+            await event.answer(msg[:190], show_alert=True)
+        return None
 
 
 class CorrelationMiddleware(BaseMiddleware):
@@ -35,13 +55,15 @@ class CorrelationMiddleware(BaseMiddleware):
 
 def build_routers() -> Router:
     """روتر چت خصوصی (همه‌ی فروشگاه) + روتر گروه (فقط قیمت)."""
-    for r in (user.router, admin.router, topup.router, shop_handlers.router, prices.router):
+    for r in (user.router, admin.router, ops.router, admin_shop.router, finance.router, topup.router,
+              shop_handlers.router, prices.router):
         r._parent_router = None  # روترها ماژول‌سطح‌اند؛ اجازه‌ی اتصال دوباره (مثلاً در تست‌ها)
     private = Router(name="private")
     private.message.filter(F.chat.type == "private")
     private.callback_query.filter(F.message.chat.type == "private")
     # ترتیب مهم است: انصراف و منوی اصلی قبل از فرم‌های چندمرحله‌ای
-    private.include_routers(user.router, admin.router, topup.router, shop_handlers.router)
+    private.include_routers(user.router, admin.router, ops.router, admin_shop.router, finance.router, topup.router,
+                            shop_handlers.router)
     root = Router(name="root")
     root.include_routers(prices.router, private)
     return root
@@ -53,9 +75,14 @@ async def setup(dp: Dispatcher, *, db: Database, shop: Shop, settings: Settings,
     await admins.load()
     joins = JoinChecker(db)
     risk = (extra or {}).get("risk")
+    if risk is None:
+        from .risk import RiskEngine
+        risk = RiskEngine(db, is_admin=admins.is_admin)
+        extra = {**(extra or {}), "risk": risk}
     dp.update.outer_middleware(CorrelationMiddleware())
     for observer in (dp.message, dp.callback_query):
         observer.outer_middleware(UserMiddleware(db, admins))
+        observer.outer_middleware(MaintenanceMiddleware(shop))
         observer.outer_middleware(ThrottleMiddleware(limiter=limiter, risk=risk))
         observer.outer_middleware(JoinMiddleware(joins))
     dp.include_router(build_routers())

@@ -26,6 +26,10 @@ class FakeStard:
                    "price": {"amount": 3788624, "currency": "IRT"}, "available": True, "purchasable_via_api": True},
             12577: {"object": "product", "id": 12577, "name": "خرس", "category": "star_gift", "stars_price": 15,
                     "price": {"amount": 112275, "currency": "IRT"}, "available": True, "purchasable_via_api": True},
+            7001: {"object": "product", "id": 7001, "name": "Plush Pepe #77", "category": "nft",
+                   "price": {"amount": 30_000_000, "currency": "IRT"}, "available": True, "purchasable_via_api": True},
+            7002: {"object": "product", "id": 7002, "name": "@rare", "category": "username",
+                   "price": {"amount": 9_000_000, "currency": "IRT"}, "available": True, "purchasable_via_api": True},
         }
 
     def transport(self) -> httpx.MockTransport:
@@ -60,6 +64,14 @@ class FakeStard:
                  "available": True}], "has_more": False, "next_offset": None})
         if path == "/gifts":
             return httpx.Response(200, json={"object": "list", "data": [self.products[12577]]})
+        if path == "/products":
+            cat = req.url.params.get("category")
+            return httpx.Response(200, json={"object": "list", "has_more": False, "data": [
+                p for p in self.products.values() if cat in (None, p["category"])]})
+        if path == "/categories":
+            return httpx.Response(200, json={"object": "list", "data": [
+                {"object": "category", "slug": c, "label": c, "available_products": 1}
+                for c in sorted({p["category"] for p in self.products.values()})]})
         if path.startswith("/products/"):
             pid = int(path.split("/")[2])
             if pid not in self.products:

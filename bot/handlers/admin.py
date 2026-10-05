@@ -5,18 +5,17 @@ from __future__ import annotations
 import contextlib
 import logging
 from html import escape
-from typing import Any
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatMemberStatus
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import Command, Filter
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, FSInputFile, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from .. import __version__, notify
+from .. import notify
 from ..admins import Admins
 from ..backups import BackupError, BackupManager
 from ..config import Settings
@@ -26,18 +25,14 @@ from ..pricing import CATEGORIES, fmt_toman, to_float, to_int
 from ..shop import COUPON_RE, Shop, ShopError
 from ..stard_api import StardError
 from ..ui import (BTN_ADMIN, STATUS_LABEL, Adm, admin_menu, back_admin, cancel_menu, drop_markup, edit_or_send,
-                  main_menu, topup_review_menu)
+                  main_menu, quick_actions, topup_review_menu)
 from ..locks import RateLimiter, allow
 from ..queue import JobQueue
 from ..worker import on_status_change, start_broadcast
+from .filters import IsAdmin
 
 log = logging.getLogger(__name__)
 router = Router(name="admin")
-
-
-class IsAdmin(Filter):
-    async def __call__(self, event: Any, is_admin: bool = False) -> bool:
-        return is_admin
 
 
 router.message.filter(IsAdmin())
@@ -75,39 +70,42 @@ SETTING_HINT = {
 }
 
 
-async def _home_text(shop: Shop, db: Database) -> str:
+async def _home(shop: Shop, db: Database, settings: Settings, is_owner: bool, queue=None, services=None):
+    """صفحه‌ی اصلی پنل = مرکز فرمان (STARD COMMAND CENTER) + دکمه‌های سریع + بخش‌ها."""
+    from .ops import command_center_text
     s = await db.stats()
-    return (f"⚙️ <b>پنل مدیریت</b> — نسخه {__version__}\n\n"
-            f"وضعیت فروشگاه: {'🟢 باز' if await shop.is_open() else '🔴 بسته'}\n"
-            f"سود پیش‌فرض: {await shop.get_profit():g}%\n"
-            f"👥 کاربران: {s['users']:,} | ⏳ سفارش باز: {s['active']:,}\n"
-            f"🧑‍💻 سفارش دستی منتظر: {s['manual']:,} | 💳 شارژ منتظر: {s['pending_topups']:,}")
-
-
-async def _home(shop: Shop, db: Database, settings: Settings, is_owner: bool):
-    return await _home_text(shop, db), admin_menu(await shop.is_open(), settings.is_test, is_owner)
+    maint, _ = await shop.maintenance()
+    kb = admin_menu(await shop.is_open(), settings.is_test, is_owner, maintenance=maint,
+                    pending_topups=s["pending_topups"], manual=s["manual"])
+    quick = quick_actions()
+    quick.attach(InlineKeyboardBuilder.from_markup(kb))
+    return await command_center_text(db, shop, queue, settings, services), quick.as_markup()
 
 
 @router.message(F.text == BTN_ADMIN)
 @router.message(Command("admin", "panel"))
 async def admin_home(message: Message, state: FSMContext, shop: Shop, db: Database, settings: Settings,
-                     is_owner: bool):
+                     is_owner: bool, queue=None, services=None):
     await state.clear()
-    text, kb = await _home(shop, db, settings, is_owner)
+    text, kb = await _home(shop, db, settings, is_owner, queue, services)
     await message.answer(text, reply_markup=kb)
 
 
 @router.callback_query(Adm.filter(F.name == "home"))
-async def cb_home(cb: CallbackQuery, state: FSMContext, shop: Shop, db: Database, settings: Settings, is_owner: bool):
+async def cb_home(cb: CallbackQuery, state: FSMContext, shop: Shop, db: Database, settings: Settings, is_owner: bool,
+                  queue=None, services=None):
     await state.clear()
-    text, kb = await _home(shop, db, settings, is_owner)
+    text, kb = await _home(shop, db, settings, is_owner, queue, services)
     await edit_or_send(cb.message, text, kb)
     await cb.answer()
 
 
 @router.callback_query(Adm.filter(F.name == "toggle"))
-async def cb_toggle(cb: CallbackQuery, db: Database, shop: Shop, settings: Settings, is_owner: bool):
-    await db.set_setting("shop_open", "0" if await shop.is_open() else "1")
+async def cb_toggle(cb: CallbackQuery, db: Database, shop: Shop, settings: Settings, is_owner: bool,
+                    queue=None, services=None):
+    was = await shop.is_open()
+    await db.set_setting("shop_open", "0" if was else "1")
+    await db.audit(admin_id=cb.from_user.id, action="shop_open", after={"open": not was})
     text, kb = await _home(shop, db, settings, is_owner)
     await edit_or_send(cb.message, text, kb)
     await cb.answer("انجام شد")
@@ -269,25 +267,42 @@ async def cb_user(cb: CallbackQuery, state: FSMContext):
 
 
 async def _user_card(db: Database, uid: int):
+    """کارت کاربر با آمار کامل: سفارش‌ها (کل/موفق/ناموفق)، مجموع خرید، سود، موجودی، زیرمجموعه، آخرین فعالیت،
+    تاریخ عضویت، VIP و امتیاز ریسک."""
+    from ..commerce import Commerce
+    from ..ui import SA
     u = await db.get_user(uid)
     if u is None:
         return "❗️ کاربر پیدا نشد.", back_admin()
     b = InlineKeyboardBuilder()
     b.button(text="➕ افزایش موجودی", callback_data=Adm(name="bal_add", arg=str(uid)))
     b.button(text="➖ کاهش موجودی", callback_data=Adm(name="bal_sub", arg=str(uid)))
-    b.button(text="📦 سفارش‌ها", callback_data=Adm(name="u_orders", arg=str(uid)))
+    b.button(text="📦 تاریخچه‌ی خرید", callback_data=Adm(name="u_orders", arg=str(uid)))
     b.button(text="📒 تراکنش‌ها", callback_data=Adm(name="u_ledger", arg=str(uid)))
+    b.button(text="🎁 پیشنهاد اختصاصی", callback_data=SA(a="uoffer", v=str(uid)))
+    b.button(text="👑 VIP", callback_data=SA(a="uvip", v=str(uid)))
     b.button(text="✉️ پیام به کاربر", callback_data=Adm(name="u_msg", arg=str(uid)))
+    b.button(text="♻️ صفر کردن ریسک", callback_data=SA(a="urisk", v=str(uid)))
     b.button(text="✅ رفع مسدودی" if u.banned else "🚫 مسدود کردن", callback_data=Adm(name="ban", arg=str(uid)))
     b.button(text="🔙 پنل مدیریت", callback_data=Adm(name="home"))
-    b.adjust(2, 2, 2, 1)
-    orders = await db.count_user_orders(uid)
+    b.adjust(2, 2, 2, 2, 1, 1)
+    st = await db.user_order_stats(uid)
+    level = await Commerce(db).user_level(uid)
+    offers = [c for c in await db.list_coupons(user_id=uid) if c["active"]]
     ref = f"\n👤 معرف: <code>{u.referrer_id}</code>" if u.referrer_id else ""
     text = (f"👤 <b>{escape(u.first_name or '')}</b> {('@' + escape(u.username)) if u.username else ''}\n"
-            f"🆔 <code>{u.id}</code>\n💰 موجودی: <b>{fmt_toman(u.balance)}</b>\n"
-            f"📦 سفارش‌ها: {orders:,} | 🛒 خرید: {fmt_toman(await db.user_spent(uid))}\n"
-            f"👥 زیرمجموعه: {await db.count_referrals(uid):,} | 🎁 پاداش: {fmt_toman(await db.referral_earnings(uid))}"
-            f"{ref}\nوضعیت: {'🚫 مسدود' if u.banned else '✅ فعال'}\n📅 عضویت: {u.created_at[:10]}")
+            f"🆔 <code>{u.id}</code> | زبان: {escape(u.language_code or '—')}\n"
+            f"💰 Balance: <b>{fmt_toman(u.balance)}</b>\n"
+            f"📦 Total Orders: {st['total']:,} | ✅ Successful: {st['ok']:,} | ❌ Failed: {st['failed']:,}\n"
+            f"🛒 Total Spent: {fmt_toman(st['spent'])} | 📈 Total Profit: {fmt_toman(st['profit'])}\n"
+            f"👥 Referrals: {await db.count_referrals(uid):,} | 🎁 پاداش: {fmt_toman(await db.referral_earnings(uid))}{ref}\n"
+            f"👑 VIP: {escape(level['name']) + (' (خودکار)' if level['source'] == 'auto' else '') if level else '—'}"
+            f"{(' تا ' + level['ends_at'][:10]) if level and level.get('ends_at') else ''}\n"
+            f"🎟 پیشنهادهای فعال: {', '.join(c['code'] for c in offers) or '—'}\n"
+            f"🛡 امتیاز ریسک: {u.risk_score}{' | ⛔️ ' + escape(u.ban_reason or '') if u.banned else ''}\n"
+            f"🕒 Last Activity: {(u.last_seen or '—')[:16].replace('T', ' ')} | آخرین سفارش: "
+            f"{(st['last_order'] or '—')[:10]}\n"
+            f"📅 Registration: {u.created_at[:10]} | وضعیت: {'🚫 مسدود' if u.banned else ('⛔️ ربات را بلاک کرده' if u.blocked else '✅ فعال')}")
     return text, b.as_markup()
 
 
@@ -569,33 +584,11 @@ async def cb_order_refund(cb: CallbackQuery, callback_data: Adm, shop: Shop, bot
     await cb.answer("انجام شد")
 
 
-# ---------- بخش‌های فروشگاه ----------
-async def _cats_view(shop: Shop):
-    b = InlineKeyboardBuilder()
-    for key, label in CATEGORIES.items():
-        on = await shop.category_enabled(key)
-        b.button(text=f"{'🟢' if on else '🔴'} {label}", callback_data=Adm(name="cat_t", arg=key))
-    b.adjust(1)
-    text = ("🗂 <b>بخش‌های فروشگاه</b>\n\nبا زدن هر دکمه، آن بخش روشن/خاموش می‌شود.\n"
-            "❤️ ریکشن استارزی در Stard API نیست؛ سفارشش برای شما می‌آید تا دستی انجام دهید.")
-    return text, back_admin(b)
-
-
+# ---------- بخش‌های فروشگاه (نسخه‌ی ۲) → مدیریت دکمه‌ها ----------
 @router.callback_query(Adm.filter(F.name == "cats"))
-async def cb_cats(cb: CallbackQuery, shop: Shop):
-    text, kb = await _cats_view(shop)
-    await edit_or_send(cb.message, text, kb)
-    await cb.answer()
-
-
-@router.callback_query(Adm.filter(F.name == "cat_t"))
-async def cb_cat_toggle(cb: CallbackQuery, callback_data: Adm, shop: Shop, db: Database):
-    if callback_data.arg in CATEGORIES:
-        on = await shop.category_enabled(callback_data.arg)
-        await db.set_setting(f"cat:{callback_data.arg}", "0" if on else "1")
-    text, kb = await _cats_view(shop)
-    await edit_or_send(cb.message, text, kb)
-    await cb.answer("انجام شد")
+async def cb_cats(cb: CallbackQuery, features=None, shop: Shop = None):
+    from .admin_shop import buttons_view
+    await buttons_view(cb, shop)
 
 
 # ---------- جوین اجباری ----------
@@ -1066,8 +1059,8 @@ async def cb_sim(cb: CallbackQuery, db: Database, settings: Settings):
         return
     b = InlineKeyboardBuilder()
     for o in rows:
-        b.button(text=f"#{o['id']} ✅", callback_data=Adm(name="simdo", arg=f"{o['id']}:completed"))
-        b.button(text=f"#{o['id']} ❌", callback_data=Adm(name="simdo", arg=f"{o['id']}:failed"))
+        b.button(text=f"#{o['id']} ✅", callback_data=Adm(name="simdo", arg=f"{o['id']}|completed"))
+        b.button(text=f"#{o['id']} ❌", callback_data=Adm(name="simdo", arg=f"{o['id']}|failed"))
     b.button(text="🔙 پنل مدیریت", callback_data=Adm(name="home"))
     b.adjust(2)
     await edit_or_send(cb.message, "🧪 نتیجه‌ی سفارش‌های آزمایشی را تعیین کنید:\n"
@@ -1077,10 +1070,10 @@ async def cb_sim(cb: CallbackQuery, db: Database, settings: Settings):
 
 @router.callback_query(Adm.filter(F.name == "simdo"))
 async def cb_sim_do(cb: CallbackQuery, callback_data: Adm, db: Database, shop: Shop, settings: Settings):
-    if not settings.is_test or ":" not in callback_data.arg:
+    if not settings.is_test or "|" not in callback_data.arg:
         await cb.answer()
         return
-    oid_s, outcome = callback_data.arg.split(":", 1)
+    oid_s, outcome = callback_data.arg.split("|", 1)
     o = await db.get_order(to_int(oid_s) or 0)
     if o is None or not o["stard_ref"] or outcome not in ("completed", "failed"):
         await cb.answer("نامعتبر", show_alert=True)

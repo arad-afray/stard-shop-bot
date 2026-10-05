@@ -21,7 +21,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand
 
-from . import __version__, monitor  # noqa: F401 — monitor کار دوره‌ای هشدار را ثبت می‌کند
+from . import __version__, campaigns, monitor
 from .app import setup
 from .backups import BackupManager
 from .updater import Updater, finish_pending_update
@@ -35,6 +35,8 @@ from .stard_api import StardError
 from .worker import Context, JobWorker, Scheduler
 
 RESTART_EXIT_CODE = 3
+# این ماژول‌ها هنگام import کارهای دوره‌ای (هشدار، پشتیبان خودکار، اعلان‌های هوشمند) را ثبت می‌کنند
+PERIODIC_MODULES = (campaigns, monitor)
 
 COMMANDS = [
     BotCommand(command="start", description="منوی اصلی"),
@@ -82,6 +84,14 @@ async def main() -> int:
     extra = dict(services.extra)
     admins = await setup(dp, db=services.db, shop=services.shop, settings=settings, queue=services.queue,
                          locks=services.locks, limiter=services.limiter, extra={"services": services, **extra})
+    risk = dp.workflow_data.get("risk")
+    if risk is not None:
+        from . import notify as _notify
+
+        async def on_ban(uid: int, score: int, reasons: str) -> None:
+            await _notify.to_admins(bot, admins, f"⛔️ <b>Ban خودکار</b> کاربر <code>{uid}</code> (ریسک {score})\n"
+                                                 f"{reasons}\nبرای رفع: 👥 کاربران ← کارت کاربر")
+        risk.on_ban = on_ban
     ctx = Context(bot=bot, shop=services.shop, db=services.db, queue=services.queue, locks=services.locks,
                   admins=admins, settings=settings, metrics=extra.get("metrics"), extra=extra)
 

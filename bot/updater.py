@@ -471,7 +471,8 @@ async def finish_pending_update(db: Database, bot: Any, admins: Any, data_dir: s
         pass
     await db.audit(admin_id=pending.get("admin_id"), action="update_result", ref=pending.get("to_version"),
                    after={"ok": ok, "version": __version__})
-    await notify.to_admins(bot, admins, (f"✅ به‌روزرسانی به v{__version__} با موفقیت انجام شد." if ok else
-                                         f"❌ به‌روزرسانی کامل نشد؛ نسخه‌ی فعلی v{__version__} است."))
+    if await notify.enabled(db, "update") or not ok:
+        await notify.to_admins(bot, admins, (f"✅ به‌روزرسانی به v{__version__} با موفقیت انجام شد." if ok else
+                                             f"❌ به‌روزرسانی کامل نشد؛ نسخه‌ی فعلی v{__version__} است."))
     return "success" if ok else "failed"
 

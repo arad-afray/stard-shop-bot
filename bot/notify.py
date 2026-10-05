@@ -15,6 +15,11 @@ from .ui import STATUS_LABEL, manual_order_menu
 log = logging.getLogger(__name__)
 
 
+async def enabled(db: Database, kind: str) -> bool:
+    """آیا این نوع اعلان هوشمند روشن است؟ (🔔 اعلان‌های هوشمند در پنل)"""
+    return kind not in (await db.get_json("notify_off", []) or [])
+
+
 async def safe_send(bot: Bot, chat_id: int | str, text: str, markup: InlineKeyboardMarkup | None = None) -> bool:
     try:
         await bot.send_message(chat_id, text, reply_markup=markup, disable_web_page_preview=True)
@@ -63,10 +68,16 @@ async def order_changed(bot: Bot, db: Database, oid: int) -> None:
             f"وضعیت: <b>{STATUS_LABEL.get(o['status'], o['status'])}</b>")
     if o["status"] == "completed":
         text += "\n\n🎉 تحویل داده شد. از خرید شما ممنونیم!"
+        send = await enabled(db, "order_success")
     elif o["refunded"]:
         u = await db.get_user(o["user_id"])
         text += f"\n\n💰 مبلغ {fmt_toman(o['price'])} به کیف پول شما برگشت.\nموجودی: <b>{fmt_toman(u.balance)}</b>"
-    await safe_send(bot, o["user_id"], text)
+        # سفارش ناموفق همیشه با برگشت پول همراه است؛ اگر هر کدام از این دو اعلان روشن باشد فرستاده می‌شود
+        send = await enabled(db, "refund") or await enabled(db, "order_failed")
+    else:
+        send = await enabled(db, "order_success")  # مرحله‌های میانی (در حال انجام)
+    if send:
+        await safe_send(bot, o["user_id"], text)
     if o["status"] == "completed" or o["refunded"]:
         await to_log_channel(bot, db, ("✅ " if o["status"] == "completed" else "↩️ ") + order_line(o))
 

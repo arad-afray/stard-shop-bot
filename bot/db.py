@@ -90,6 +90,7 @@ class User:
     last_seen: str | None = None
     risk_score: int = 0
     ban_reason: str | None = None
+    blocked: bool = False
 
 
 class InsufficientBalance(Exception):
@@ -762,7 +763,7 @@ def _user(row: Row) -> User:
                 balance=int(row["balance"]), banned=bool(row["banned"]), created_at=row["created_at"],
                 referrer_id=row.get("referrer_id"), language_code=row.get("language_code"),
                 last_seen=row.get("last_seen"), risk_score=int(row.get("risk_score") or 0),
-                ban_reason=row.get("ban_reason"))
+                ban_reason=row.get("ban_reason"), blocked=bool(row.get("blocked") or 0))
 
 
 __all__ = ["Database", "User", "InsufficientBalance", "CouponInvalid", "OutOfStock", "models", "now", "ago",
