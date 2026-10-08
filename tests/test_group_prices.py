@@ -186,3 +186,9 @@ async def test_inline_mode(env):
     await click(dp, bot, ADMIN, Adm(name="group", arg="inl"))  # خاموش از پنل
     r = await inline("10 تون", 4)
     assert r.results == []
+
+
+def test_parse_with_greeting():
+    assert gp.parse("سلام قیمت تون چنده؟") == gp.Query("ton")
+    assert gp.parse("سلام داداش 10 تون چند") == gp.Query("ton", Decimal(10))
+    assert gp.parse("سلام خوبی") is None
