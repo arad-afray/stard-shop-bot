@@ -15,7 +15,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, FSInputFile, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from .. import notify
+from .. import notify, reports
 from ..admins import Admins
 from ..backups import BackupError, BackupManager
 from ..config import Settings
@@ -292,17 +292,17 @@ async def _user_card(db: Database, uid: int):
     ref = f"\n👤 معرف: <code>{u.referrer_id}</code>" if u.referrer_id else ""
     text = (f"👤 <b>{escape(u.first_name or '')}</b> {('@' + escape(u.username)) if u.username else ''}\n"
             f"🆔 <code>{u.id}</code> | زبان: {escape(u.language_code or '—')}\n"
-            f"💰 Balance: <b>{fmt_toman(u.balance)}</b>\n"
-            f"📦 Total Orders: {st['total']:,} | ✅ Successful: {st['ok']:,} | ❌ Failed: {st['failed']:,}\n"
-            f"🛒 Total Spent: {fmt_toman(st['spent'])} | 📈 Total Profit: {fmt_toman(st['profit'])}\n"
-            f"👥 Referrals: {await db.count_referrals(uid):,} | 🎁 پاداش: {fmt_toman(await db.referral_earnings(uid))}{ref}\n"
+            f"💰 موجودی: <b>{fmt_toman(u.balance)}</b>\n"
+            f"📦 کل سفارش‌ها: {st['total']:,} | ✅ موفق: {st['ok']:,} | ❌ ناموفق: {st['failed']:,}\n"
+            f"🛒 کل خرید: {fmt_toman(st['spent'])} | 📈 سود از این کاربر: {fmt_toman(st['profit'])}\n"
+            f"👥 زیرمجموعه‌ها: {await db.count_referrals(uid):,} | 🎁 پاداش: {fmt_toman(await db.referral_earnings(uid))}{ref}\n"
             f"👑 VIP: {escape(level['name']) + (' (خودکار)' if level['source'] == 'auto' else '') if level else '—'}"
             f"{(' تا ' + level['ends_at'][:10]) if level and level.get('ends_at') else ''}\n"
             f"🎟 پیشنهادهای فعال: {', '.join(c['code'] for c in offers) or '—'}\n"
             f"🛡 امتیاز ریسک: {u.risk_score}{' | ⛔️ ' + escape(u.ban_reason or '') if u.banned else ''}\n"
-            f"🕒 Last Activity: {(u.last_seen or '—')[:16].replace('T', ' ')} | آخرین سفارش: "
+            f"🕒 آخرین فعالیت: {(u.last_seen or '—')[:16].replace('T', ' ')} | آخرین سفارش: "
             f"{(st['last_order'] or '—')[:10]}\n"
-            f"📅 Registration: {u.created_at[:10]} | وضعیت: {'🚫 مسدود' if u.banned else ('⛔️ ربات را بلاک کرده' if u.blocked else '✅ فعال')}")
+            f"📅 تاریخ عضویت: {u.created_at[:10]} | وضعیت: {'🚫 مسدود' if u.banned else ('⛔️ ربات را بلاک کرده' if u.blocked else '✅ فعال')}")
     return text, b.as_markup()
 
 
@@ -795,7 +795,7 @@ async def cb_group(cb: CallbackQuery, callback_data: Adm, db: Database):
                        "ربات را به گروه اضافه کنید. با نوشتن «قیمت دلار»، «قیمت تون»، «قیمت استارز» یا «قیمت» "
                        "(یا دستور /price) قیمت لحظه‌ای را جواب می‌دهد.\n\n"
                        "⚠️ برای دیدن پیام‌های عادی گروه، در @BotFather گزینه‌ی "
-                       "<b>Bot Settings → Group Privacy → Turn off</b> را بزنید، یا ربات را در گروه ادمین کنید.",
+                       "<b>Bot Settings → Group Privacy → Turn off</b> (تنظیمات ربات ← حریم گروه ← خاموش) را بزنید، یا ربات را در گروه ادمین کنید.",
                        back_admin(b))
     await cb.answer()
 
@@ -891,8 +891,71 @@ async def cb_settings(cb: CallbackQuery, db: Database):
         shown = escape(val[:60] + ("…" if len(val) > 60 else "")) if val else "— تنظیم نشده"
         lines.append(f"{label}: {shown}")
         b.button(text=f"✏️ {label}", callback_data=Adm(name="sset", arg=key))
+    b.button(text="📨 گزارش روزانه", callback_data=Adm(name="drep"))
     b.adjust(1)
     await edit_or_send(cb.message, "\n".join(lines), back_admin(b))
+    await cb.answer()
+
+
+# ---------- راهنمای پنل ----------
+PANEL_HELP = (
+    "📖 <b>راهنمای پنل مدیریت</b>\n\n"
+    "📊 <b>آمار</b>: تعداد کاربران، سفارش‌ها و فروش.\n"
+    "💵 <b>مالی</b>: درآمد، سود خالص، دفتر کل (همه‌ی تغییرات موجودی)، برگشت پول، پرداخت‌های ناموفق، "
+    "خروجی اکسل/PDF و ماشین‌حساب کارمزد.\n"
+    "👥 <b>کاربران</b>: جستجوی کاربر، افزایش/کاهش موجودی، مسدود کردن، سطح VIP.\n"
+    "🧾 <b>سفارش‌ها</b>: سفارش‌های اخیر، استعلام از Stard، برگشت پول دستی.\n"
+    "💳 <b>شارژها</b>: رسیدهای کارت‌به‌کارت که منتظر تأیید شما هستند.\n"
+    "💰 <b>درصد سود</b>: سود شما روی قیمت Stard (کلی یا برای هر بخش).\n"
+    "🛍 <b>مدیریت فروشگاه</b>: روشن/خاموش کردن بخش‌ها، ترتیب دکمه‌ها، حراج و قیمت‌گذاری، VIP، موجودی انبار، "
+    "حالت آزمایشی.\n"
+    "📣 <b>بازاریابی</b>: پیام همگانی، کد تخفیف، پیشنهاد اختصاصی، پاداش روزانه و گردونه.\n"
+    "🛠 <b>سیستم</b>: سلامت ربات، پشتیبان‌گیری، به‌روزرسانی، لاگ‌ها، صف کارها، هشدارها و گزارش رویدادها.\n"
+    "⚙️ <b>تنظیمات</b>: متن‌ها، کارت بانکی، کانال گزارش، عضویت اجباری و گزارش روزانه.\n"
+    "🧹 <b>حالت تعمیر</b>: فروش را موقتاً متوقف می‌کند و به کاربران پیام «در حال تعمیر» نشان می‌دهد.\n"
+    "🔴/🟢 <b>بستن/باز کردن فروشگاه</b>: فقط فروش را متوقف یا شروع می‌کند.\n\n"
+    "💡 <b>نکته‌ها</b>\n"
+    "• پول کاربر هیچ‌وقت دو بار کم نمی‌شود؛ سفارش ناموفق خودکار برگشت می‌خورد.\n"
+    "• قبل از هر به‌روزرسانی خودکار پشتیبان گرفته می‌شود و اگر مشکلی پیش بیاید نسخه‌ی قبلی برمی‌گردد.\n"
+    "• برای امتحان بدون خرج پول واقعی: 🛍 مدیریت فروشگاه ← 🧪 حالت آزمایشی.\n"
+    "• نسخه‌ی فعلی ربات پایین صفحه‌ی اصلی پنل نوشته شده است."
+)
+
+
+@router.callback_query(Adm.filter(F.name == "help"))
+async def cb_panel_help(cb: CallbackQuery):
+    await edit_or_send(cb.message, PANEL_HELP, back_admin(InlineKeyboardBuilder()))
+    await cb.answer()
+
+
+# ---------- گزارش روزانه ----------
+@router.callback_query(Adm.filter(F.name == "drep"))
+async def cb_daily_report(cb: CallbackQuery, callback_data: Adm, db: Database):
+    cfg = await reports.get_config(db)
+    if callback_data.arg == "toggle":
+        cfg["enabled"] = not cfg["enabled"]
+    elif callback_data.arg in ("h+", "h-"):
+        cfg["hour"] = (int(cfg["hour"]) + (1 if callback_data.arg == "h+" else -1)) % 24
+    elif callback_data.arg == "now":
+        await cb.message.answer(await reports.build(db))
+        await cb.answer()
+        return
+    if callback_data.arg:
+        await db.set_json("daily_report", cfg)
+        await db.audit(admin_id=cb.from_user.id, action="daily_report.update", after=cfg)
+    b = InlineKeyboardBuilder()
+    b.button(text="🔴 خاموش کردن" if cfg["enabled"] else "🟢 روشن کردن", callback_data=Adm(name="drep", arg="toggle"))
+    b.button(text="➖ یک ساعت زودتر", callback_data=Adm(name="drep", arg="h-"))
+    b.button(text="➕ یک ساعت دیرتر", callback_data=Adm(name="drep", arg="h+"))
+    b.button(text="📨 همین الان گزارش امروز را بفرست", callback_data=Adm(name="drep", arg="now"))
+    b.button(text="⬅️ تنظیمات", callback_data=Adm(name="settings"))
+    b.adjust(1, 2, 1, 1)
+    await edit_or_send(cb.message,
+                       "📨 <b>گزارش روزانه</b>\n\n"
+                       f"وضعیت: {'🟢 روشن' if cfg['enabled'] else '🔴 خاموش'}\n"
+                       f"ساعت ارسال: <b>{int(cfg['hour']):02d}:00</b> به وقت تهران\n\n"
+                       "هر روز در این ساعت خلاصه‌ی فروش، سود، سفارش‌های ناموفق، شارژها و کاربران جدید همان روز "
+                       "برای همه‌ی مدیرها فرستاده می‌شود.", b.as_markup())
     await cb.answer()
 
 

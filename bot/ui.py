@@ -306,12 +306,13 @@ def admin_menu(shop_open: bool, is_test: bool, is_owner: bool, *, maintenance: b
     b.button(text="📣 بازاریابی", callback_data=SA(a="mkt"))
     b.button(text="🛠 سیستم", callback_data=Op(a="menu"))
     b.button(text="⚙️ تنظیمات", callback_data=Adm(name="settings"))
+    b.button(text="📖 راهنمای پنل", callback_data=Adm(name="help"))
     if is_owner:
         b.button(text="👮 مدیرها", callback_data=Adm(name="admins"))
-    b.button(text="🧹 خاموش کردن Maintenance" if maintenance else "🧹 Maintenance", callback_data=Op(a="maint"))
+    b.button(text="🧹 خاموش کردن حالت تعمیر" if maintenance else "🧹 حالت تعمیر", callback_data=Op(a="maint"))
     b.button(text="🔴 بستن فروشگاه" if shop_open else "🟢 باز کردن فروشگاه", callback_data=Adm(name="toggle"))
     if is_test:
-        b.button(text="🧪 شبیه‌سازی سفارش (test)", callback_data=Adm(name="sim"))
+        b.button(text="🧪 شبیه‌سازی سفارش (آزمایشی)", callback_data=Adm(name="sim"))
     b.adjust(1, 2)
     return b.as_markup()
 
@@ -319,12 +320,12 @@ def admin_menu(shop_open: bool, is_test: bool, is_owner: bool, *, maintenance: b
 def quick_actions() -> InlineKeyboardBuilder:
     """دکمه‌های سریع مرکز فرمان."""
     b = InlineKeyboardBuilder()
-    b.button(text="🔄 Update", callback_data=Op(a="upd"))
-    b.button(text="💾 Backup", callback_data=Op(a="bk"))
-    b.button(text="🩺 Health Check", callback_data=Op(a="hc"))
-    b.button(text="📜 Logs", callback_data=Op(a="logs"))
-    b.button(text="🧪 Diagnostics", callback_data=Op(a="diag"))
-    b.button(text="🧹 Maintenance", callback_data=Op(a="maint"))
+    b.button(text="🔄 به‌روزرسانی ربات", callback_data=Op(a="upd"))
+    b.button(text="💾 پشتیبان", callback_data=Op(a="bk"))
+    b.button(text="🩺 بررسی سلامت", callback_data=Op(a="hc"))
+    b.button(text="📜 لاگ‌ها", callback_data=Op(a="logs"))
+    b.button(text="🧪 عیب‌یابی API", callback_data=Op(a="diag"))
+    b.button(text="🧹 حالت تعمیر", callback_data=Op(a="maint"))
     b.adjust(3)
     return b
 

@@ -25,7 +25,7 @@ from ..db import Database
 from ..logging_setup import LOG_FILE, read_logs, redact
 from ..metrics import human_bytes, human_duration, system_snapshot
 from ..migrations_runner import current_revision, head_revision, pending_revisions, upgrade
-from ..monitor import ALERT_TEXT, DEFAULT_THRESHOLDS, ICON, business_metrics, format_checks, run_health_check, \
+from ..monitor import ALERT_TEXT, DEFAULT_THRESHOLDS, ICON, business_metrics, check_label, format_checks, run_health_check, \
     services_status
 from ..pricing import fmt_toman
 from ..queue import JobQueue
@@ -44,6 +44,10 @@ router.callback_query.filter(IsAdmin())
 HOME = Adm(name="home")
 MENU = Op(a="menu")
 _update_task: asyncio.Task | None = None
+
+TEST_MODES = {"off": "خاموش", "admins": "فقط مدیرها", "all": "همه"}
+BACKUP_KINDS = {"manual": "دستی", "auto": "خودکار", "pre-update": "قبل از آپدیت", "pre-migration": "قبل از مهاجرت",
+                "pre-restore": "قبل از بازگردانی"}
 
 
 class OpsForm(StatesGroup):
@@ -123,21 +127,21 @@ async def command_center_text(db: Database, shop: Shop, queue: JobQueue | None, 
     upd = await db.get_json("update:last_check") or {}
     latest = upd.get("latest") or "؟"
     newer = upd.get("newer")
-    bad = [c["name"] for c in health if c.get("status") == "fail"]
-    warn = [c["name"] for c in health if c.get("status") == "warn"]
+    bad = [check_label(c["name"]) for c in health if c.get("status") == "fail"]
+    warn = [check_label(c["name"]) for c in health if c.get("status") == "warn"]
     sys_health = (f"{ICON['fail']} مشکل: {', '.join(bad)}" if bad else
                   f"{ICON['warn']} هشدار: {', '.join(warn)}" if warn else
-                  f"{ICON['ok']} سالم" if health else "⚪️ هنوز بررسی نشده (🩺 Health Check)")
+                  f"{ICON['ok']} سالم" if health else "⚪️ هنوز بررسی نشده (🩺 بررسی سلامت)")
     lines = [
-        "🛰 <b>STARD COMMAND CENTER</b>",
-        f"{'🧹 <b>Maintenance روشن</b> | ' if maint else ''}فروشگاه: {'🟢 باز' if await shop.is_open() else '🔴 بسته'}"
-        f" | Test Mode: {await shop.test_mode()}",
+        "🛰 <b>مرکز فرمان استارد</b>",
+        f"{'🧹 <b>حالت تعمیر روشن</b> | ' if maint else ''}فروشگاه: {'🟢 باز' if await shop.is_open() else '🔴 بسته'}"
+        f" | حالت آزمایشی: {TEST_MODES.get(await shop.test_mode(), '?')}",
         "",
         "<b>سرویس‌ها</b>",
-        svc_line("bot", "Bot"), hline("API", "API"), svc_line("worker", "Worker"), hline("Database", "Database"),
-        hline("Redis", "Redis"),
-        (f"{ICON['ok' if q['lag_seconds'] < 120 else 'warn']} Queue: {q['queued']} در صف | {q['running']} در اجرا | "
-         f"dead {q['dead']} | تأخیر {human_duration(q['lag_seconds'])}") if q else "⚪️ Queue",
+        svc_line("bot", "ربات"), hline("API", "API استارد"), svc_line("worker", "پردازشگر صف"),
+        hline("Database", "پایگاه داده"), hline("Redis", "Redis"),
+        (f"{ICON['ok' if q['lag_seconds'] < 120 else 'warn']} صف: {q['queued']} در صف | {q['running']} در اجرا | "
+         f"متوقف {q['dead']} | تأخیر {human_duration(q['lag_seconds'])}") if q else "⚪️ صف",
         "",
         "<b>کسب‌وکار</b>",
         f"👥 کاربران: {s['users']:,} | 🧾 سفارش‌ها: {s['done']:,} انجام | ⏳ {s['active']:,} باز",
@@ -156,13 +160,13 @@ async def command_center_text(db: Database, shop: Shop, queue: JobQueue | None, 
 @router.callback_query(Op.filter(F.a == "menu"))
 async def ops_menu(cb: CallbackQuery):
     await edit_or_send(cb.message, "🛠 <b>سیستم</b>\n\nابزارهای نگهداری، مانیتورینگ و امنیت:", section([
-        ("🩺 Health Check", Op(a="hc")), ("📜 لاگ‌های سیستم", Op(a="logs")),
-        ("💾 Backup Manager", Op(a="bk")), ("🔄 بررسی آپدیت پروژه", Op(a="upd")),
-        ("🗄 Migration Manager", Op(a="mig")), ("🧪 API Diagnostics", Op(a="diag")),
-        ("🔑 API Key Manager", Op(a="keys")), ("🪝 Webhook Monitor", Op(a="wh")),
-        ("📬 Queue Monitor", Op(a="q")), ("🛡 Security Scanner", Op(a="sec")),
-        ("📊 DB Statistics", Op(a="dbs")), ("📦 Dependency Checker", Op(a="deps")),
-        ("📋 Audit Log", Op(a="audit")), ("🚨 هشدارها", Op(a="al")),
+        ("🩺 بررسی سلامت", Op(a="hc")), ("📜 لاگ‌های سیستم", Op(a="logs")),
+        ("💾 پشتیبان‌گیری", Op(a="bk")), ("🔄 بررسی آپدیت پروژه", Op(a="upd")),
+        ("🗄 مهاجرت پایگاه داده", Op(a="mig")), ("🧪 عیب‌یابی API", Op(a="diag")),
+        ("🔑 کلیدهای API", Op(a="keys")), ("🪝 وب‌هوک‌ها", Op(a="wh")),
+        ("📬 صف کارها", Op(a="q")), ("🛡 بررسی امنیتی", Op(a="sec")),
+        ("📊 آمار پایگاه داده", Op(a="dbs")), ("📦 بررسی کتابخانه‌ها", Op(a="deps")),
+        ("📋 گزارش رویدادها", Op(a="audit")), ("🚨 هشدارها", Op(a="al")),
         ("🖥 منابع سیستم", Op(a="res")), ("🏦 کیف پول Stard", Adm(name="wallet")),
     ], HOME))
     await cb.answer()
@@ -176,8 +180,8 @@ async def health(cb: CallbackQuery, bot: Bot, shop: Shop, db: Database, settings
     checks = await run_health_check(_ctx(bot, shop, db, queue or JobQueue(db, settings.instance_id), locks, settings,
                                          services, admins))
     b = InlineKeyboardBuilder()
-    b.button(text="🔄 Run Health Check", callback_data=Op(a="hc"))
-    await edit_or_send(cb.message, "🩺 <b>Health Check</b>\n\n" + format_checks(checks), back_to(MENU, b))
+    b.button(text="🔄 اجرای بررسی سلامت", callback_data=Op(a="hc"))
+    await edit_or_send(cb.message, "🩺 <b>بررسی سلامت</b>\n\n" + format_checks(checks), back_to(MENU, b))
 
 
 @router.callback_query(Op.filter(F.a == "res"))
@@ -187,14 +191,14 @@ async def resources(cb: CallbackQuery, services=None):
     sup = _svc(services, "supervisor")
     lines = ["🖥 <b>منابع سیستم</b>\n",
              f"CPU: {snap.get('cpu_percent', '—')}% ({snap.get('cpu_count', '?')} هسته)"
-             + (f" | Load: {', '.join(f'{x:.2f}' for x in snap['load_avg'])}" if snap.get("load_avg") else ""),
+             + (f" | بار پردازنده: {', '.join(f'{x:.2f}' for x in snap['load_avg'])}" if snap.get("load_avg") else ""),
              f"RAM: {snap.get('mem_percent', '—')}% ({human_bytes(snap.get('mem_used'))} / "
              f"{human_bytes(snap.get('mem_total'))})",
-             f"Disk: {snap.get('disk_percent', '—')}% | آزاد {human_bytes(snap.get('disk_free'))}",
-             f"Network: ↑ {human_bytes(snap.get('net_sent'))} ↓ {human_bytes(snap.get('net_recv'))}",
-             f"پردازه: RAM {human_bytes(snap.get('proc_rss'))} | Threads {snap.get('proc_threads', '—')}"]
+             f"دیسک: {snap.get('disk_percent', '—')}% | آزاد {human_bytes(snap.get('disk_free'))}",
+             f"شبکه: ↑ {human_bytes(snap.get('net_sent'))} ↓ {human_bytes(snap.get('net_recv'))}",
+             f"پردازه: RAM {human_bytes(snap.get('proc_rss'))} | رشته‌ها {snap.get('proc_threads', '—')}"]
     if m is not None:
-        lines.append(f"Uptime: {human_duration(m.uptime())} | آپدیت تلگرام: {int(m.counters.get('telegram_updates_total', 0)):,}"
+        lines.append(f"مدت روشن بودن: {human_duration(m.uptime())} | آپدیت تلگرام: {int(m.counters.get('telegram_updates_total', 0)):,}"
                      f" | خطا: {int(m.counters.get('errors_total', 0)):,}")
         p95 = m.api_latency.pct(95)
         if p95 is not None:
@@ -203,7 +207,7 @@ async def resources(cb: CallbackQuery, services=None):
     if sup is not None:
         lines.append("\n<b>سرویس‌های داخلی</b>")
         for name, status in sup.status.items():
-            lines.append(f"{'🟢' if status == 'running' else '🔴'} {name}: {status} | Restart: {sup.restarts.get(name, 0)}")
+            lines.append(f"{'🟢' if status == 'running' else '🔴'} {name}: {status} | ری‌استارت: {sup.restarts.get(name, 0)}")
     await edit_or_send(cb.message, "\n".join(lines), back_to(MENU))
     await cb.answer()
 
@@ -266,7 +270,7 @@ async def logs(cb: CallbackQuery, callback_data: Op, state: FSMContext, settings
 @router.callback_query(Op.filter(F.a == "logq"))
 async def logs_search_ask(cb: CallbackQuery, state: FSMContext):
     await state.set_state(OpsForm.log_search)
-    await cb.message.answer("🔎 متن جستجو (یا Correlation ID مثل u12345) را بفرستید:", reply_markup=cancel_menu())
+    await cb.message.answer("🔎 متن جستجو (یا شناسه‌ی پیگیری مثل u12345) را بفرستید:", reply_markup=cancel_menu())
     await cb.answer()
 
 
@@ -311,7 +315,7 @@ async def logs_download(cb: CallbackQuery, bot: Bot, settings: Settings):
         return
     await cb.answer()
     await bot.send_document(cb.from_user.id, FSInputFile(path, filename=f"stard-logs-{datetime.now():%Y%m%d-%H%M}.jsonl"),
-                            caption="📜 لاگ ساختاریافته (JSON Lines). secretها حذف شده‌اند.")
+                            caption="📜 لاگ‌های ربات. رمزها و کلیدها از آن حذف شده‌اند.")
 
 
 # ---------- Backup Manager ----------
@@ -319,16 +323,16 @@ async def logs_download(cb: CallbackQuery, bot: Bot, settings: Settings):
 async def backups_view(cb: CallbackQuery, db: Database, settings: Settings, locks=None, services=None):
     mgr = _backups(db, settings, locks, services)
     items = mgr.list()
-    lines = ["💾 <b>Backup Manager</b>\n",
+    lines = ["💾 <b>پشتیبان‌گیری</b>\n",
              f"پشتیبان خودکار: هر {settings.backup_interval_hours} ساعت | نگه‌داری: {settings.backup_keep} از هر نوع | "
              f"مسیر: <code>{escape(settings.backup_dir)}</code>",
              "قبل از هر به‌روزرسانی، مهاجرت و بازگردانی خودکار پشتیبان گرفته می‌شود.\n"]
     b = InlineKeyboardBuilder()
-    b.button(text="➕ Create Backup", callback_data=Op(a="bkc"))
+    b.button(text="➕ ساخت پشتیبان", callback_data=Op(a="bkc"))
     for it in items[:12]:
         lines.append(f"• <code>{it.name}</code>\n   {it.kind} | {human_bytes(it.size)} | {it.created_at[:16].replace('T', ' ')}"
                      f" | v{it.version} | {it.rows:,} ردیف")
-        b.button(text=f"📁 {it.created_at[5:16].replace('T', ' ')} ({it.kind})", callback_data=Op(a="bki", v=it.name[13:]))
+        b.button(text=f"📁 {it.created_at[5:16].replace('T', ' ')} ({BACKUP_KINDS.get(it.kind, it.kind)})", callback_data=Op(a="bki", v=it.name[13:]))
     if not items:
         lines.append("— هنوز پشتیبانی ساخته نشده —")
     b.adjust(1)
@@ -363,8 +367,8 @@ async def backup_item(cb: CallbackQuery, callback_data: Op, db: Database, settin
         await cb.answer("پیدا نشد.", show_alert=True)
         return
     b = InlineKeyboardBuilder()
-    for text, a in (("🔍 Verify", "bkv"), ("🧪 Restore Test", "bkt"), ("⬇️ دانلود", "bkdl"),
-                    ("♻️ Restore", "bkr"), ("🗑 Delete", "bkdel")):
+    for text, a in (("🔍 بررسی سالم بودن", "bkv"), ("🧪 بازگردانی آزمایشی", "bkt"), ("⬇️ دانلود", "bkdl"),
+                    ("♻️ بازگردانی", "bkr"), ("🗑 حذف", "bkdel")):
         b.button(text=text, callback_data=Op(a=a, v=callback_data.v))
     b.adjust(3, 2)
     await edit_or_send(cb.message,
@@ -414,7 +418,7 @@ async def backup_danger_ask(cb: CallbackQuery, callback_data: Op, is_owner: bool
     if callback_data.a == "bkr":
         text = (f"♻️ <b>بازگردانی</b> <code>{name}</code>\n\nهمه‌ی داده‌های فعلی با این پشتیبان جایگزین می‌شوند. قبل از آن "
                 "یک پشتیبان pre-restore خودکار گرفته می‌شود. بازگردانی در یک تراکنش است (همه یا هیچ) و بعد از آن ربات "
-                "Restart می‌شود.\n\nمطمئن هستید؟")
+                "ری‌استارت می‌شود.\n\nمطمئن هستید؟")
         yes = Op(a="bkr!", v=callback_data.v)
     else:
         text = f"🗑 حذف <code>{name}</code>؟ این کار برگشت‌پذیر نیست."
@@ -452,7 +456,7 @@ async def backup_danger(cb: CallbackQuery, callback_data: Op, db: Database, shop
         return
     shop.clear_cache()
     await cb.message.answer(f"✅ بازگردانی کامل شد ({r['rows']:,} ردیف). پشتیبان قبلی: <code>{r['safety_backup']}</code>\n"
-                            "ربات برای پاک شدن کش‌ها Restart می‌شود…")
+                            "ربات برای پاک شدن کش‌ها ری‌استارت می‌شود…")
     restart = _svc(services, "request_restart")
     if restart is not None:
         restart()
@@ -462,9 +466,9 @@ async def backup_danger(cb: CallbackQuery, callback_data: Op, db: Database, shop
 def _state_text(st: Any) -> str:
     icons = {"ok": "✅", "fail": "❌", "run": "⏳", "skip": "⏭"}
     lines = [f"{icons.get(s[1], '•')} {escape(s[0])}" + (f" — {escape(s[2])}" if s[2] else "") for s in st.steps]
-    result = {"running": "⏳ در حال اجرا", "restarting": "🔄 در حال Restart", "success": "✅ موفق",
+    result = {"running": "⏳ در حال اجرا", "restarting": "🔄 در حال ری‌استارت", "success": "✅ موفق",
               "failed": "❌ ناموفق", "rolled_back": "↩️ ناموفق — به نسخه‌ی قبلی برگشت", "idle": "—"}.get(st.status, st.status)
-    return ("<b>Update Progress</b>\n" + ("\n".join(lines) or "—") + f"\n\n<b>Update Result</b>: {result}"
+    return ("<b>مراحل به‌روزرسانی</b>\n" + ("\n".join(lines) or "—") + f"\n\n<b>نتیجه‌ی به‌روزرسانی</b>: {result}"
             + (f"\n⚠️ {escape(st.error)}" if st.error else ""))
 
 
@@ -479,9 +483,9 @@ async def update_view(cb: CallbackQuery, db: Database, settings: Settings, locks
     last_backup = next((b for b in _backups(db, settings, locks, services).list() if b.kind == "pre-update"), None)
     text = (f"🔄 <b>بررسی آپدیت پروژه</b>\n\nنسخه فعلی:\n<b>v{info.current}</b>\n\nآخرین نسخه:\n"
             f"<b>{('v' + info.latest) if info.latest else '—'}</b>\n\nوضعیت:\n{status}\n\n"
-            f"Release Date: {info.published_at or '—'}\n"
-            f"Migration Required: {'—' if st.migration_required is None else ('بله' if st.migration_required else 'خیر')}\n"
-            f"Backup Status: {last_backup.name if last_backup else 'قبل از آپدیت خودکار ساخته می‌شود'}\n"
+            f"تاریخ انتشار: {info.published_at or '—'}\n"
+            f"نیاز به مهاجرت پایگاه داده: {'—' if st.migration_required is None else ('بله' if st.migration_required else 'خیر')}\n"
+            f"پشتیبان: {last_backup.name if last_backup else 'قبل از آپدیت خودکار ساخته می‌شود'}\n"
             f"حالت نصب: {mode}\n\n" + (_state_text(st) if st.steps else ""))
     b = InlineKeyboardBuilder()
     b.button(text="🔄 بررسی دوباره", callback_data=Op(a="upd"))
@@ -507,8 +511,8 @@ async def update_confirm(cb: CallbackQuery, db: Database, is_owner: bool = False
         return
     info = await db.get_json("update:last_check") or {}
     await edit_or_send(cb.message, f"🚀 به‌روزرسانی به <b>v{escape(str(info.get('latest')))}</b>؟\n\n"
-                                   "مراحل: پیش‌بررسی و اعتبارسنجی Release ← پشتیبان ← تعویض کد ← نصب وابستگی‌ها ← "
-                                   "مهاجرت ← Health Check ← Restart.\nاگر هر مرحله شکست بخورد، خودکار به نسخه‌ی فعلی "
+                                   "مراحل: پیش‌بررسی و اعتبارسنجی نسخه ← پشتیبان ← تعویض کد ← نصب وابستگی‌ها ← "
+                                   "مهاجرت ← بررسی سلامت ← ری‌استارت.\nاگر هر مرحله شکست بخورد، خودکار به نسخه‌ی فعلی "
                                    "برمی‌گردد.", _confirm(Op(a="upd!"), Op(a="upd")))
     await cb.answer()
 
@@ -552,9 +556,9 @@ async def migrations_view(cb: CallbackQuery, db: Database):
     cur, head, pending = await current_revision(db), head_revision(), await pending_revisions(db)
     b = InlineKeyboardBuilder()
     if pending:
-        b.button(text="▶️ Run Migration", callback_data=Op(a="mig?"))
-    await edit_or_send(cb.message, f"🗄 <b>Migration Manager</b>\n\nCurrent Migration: <code>{cur}</code>\n"
-                                   f"Latest Migration: <code>{head}</code>\nPending Migrations: "
+        b.button(text="▶️ اجرای مهاجرت", callback_data=Op(a="mig?"))
+    await edit_or_send(cb.message, f"🗄 <b>مهاجرت پایگاه داده</b>\n\nنسخه‌ی فعلی: <code>{cur}</code>\n"
+                                   f"آخرین نسخه: <code>{head}</code>\nمهاجرت‌های انجام‌نشده: "
                                    f"{', '.join(pending) if pending else '— (به‌روز است)'}\nپایگاه داده: {db.dialect}",
                        back_to(MENU, b))
     await cb.answer()
@@ -598,8 +602,8 @@ async def diagnostics(cb: CallbackQuery, shop: Shop, services=None):
     rows = await api_diagnostics(shop.api, _svc(services, "metrics"))
     icon = {"ok": "🟢", "warn": "🟡", "fail": "🔴"}
     b = InlineKeyboardBuilder()
-    b.button(text="▶️ Run Diagnostics", callback_data=Op(a="diag"))
-    await edit_or_send(cb.message, "🧪 <b>API Diagnostics</b>\n\n" + "\n".join(
+    b.button(text="▶️ اجرای عیب‌یابی", callback_data=Op(a="diag"))
+    await edit_or_send(cb.message, "🧪 <b>عیب‌یابی API</b>\n\n" + "\n".join(
         f"{icon[s]} <b>{n}</b>: {escape(d)}" for n, s, d in rows), back_to(MENU, b))
 
 
@@ -607,18 +611,18 @@ async def diagnostics(cb: CallbackQuery, shop: Shop, services=None):
 @router.callback_query(Op.filter(F.a == "keys"))
 async def keys_view(cb: CallbackQuery, db: Database, settings: Settings):
     rows = await apikeys.list_keys(db)
-    lines = ["🔑 <b>API Key Manager</b>\n",
+    lines = ["🔑 <b>کلیدهای API</b>\n",
              f"کلیدهای API خود ربات برای /metrics و /api سرور داخلی ({escape(settings.http_host)}:{settings.http_port}). "
              "کلید کامل فقط یک بار نمایش داده می‌شود.\n"]
     b = InlineKeyboardBuilder()
-    b.button(text="➕ Create", callback_data=Op(a="keyc"))
+    b.button(text="➕ ساخت کلید", callback_data=Op(a="keyc"))
     for k in rows:
         state = "⛔️ باطل" if k["revoked_at"] else "🟢 فعال"
         lines.append(f"• <b>{escape(k['name'])}</b> <code>sbk_{k['prefix']}_…</code> {state}\n   دسترسی: {k['scopes']} | "
                      f"ساخت: {k['created_at'][:10]} | آخرین استفاده: {(k['last_used_at'] or '—')[:16]}")
         if not k["revoked_at"]:
-            b.button(text=f"🔁 Rotate {k['name'][:12]}", callback_data=Op(a="keyrot", v=str(k["id"])))
-            b.button(text=f"⛔️ Revoke {k['name'][:12]}", callback_data=Op(a="keyrev", v=str(k["id"])))
+            b.button(text=f"🔁 تعویض {k['name'][:12]}", callback_data=Op(a="keyrot", v=str(k["id"])))
+            b.button(text=f"⛔️ باطل {k['name'][:12]}", callback_data=Op(a="keyrev", v=str(k["id"])))
     b.adjust(1, 2)
     await edit_or_send(cb.message, "\n".join(lines)[:4000], back_to(MENU, b))
     await cb.answer()
@@ -673,11 +677,11 @@ async def webhooks_view(cb: CallbackQuery, db: Database, settings: Settings):
     counts = {r["status"]: r["n"] for r in await db.all("SELECT status, COUNT(*) AS n FROM webhook_events GROUP BY status")}
     retried = await db.scalar("SELECT COUNT(*) FROM webhook_events WHERE attempts > 1")
     rows = await db.all("SELECT * FROM webhook_events ORDER BY received_at DESC LIMIT 15")
-    lines = ["🪝 <b>Webhook Monitor</b>\n",
+    lines = ["🪝 <b>وب‌هوک‌ها</b>\n",
              f"وضعیت: {'🟢 فعال' if settings.stard_webhook_secret else '⚪️ غیرفعال (STARD_WEBHOOK_SECRET تنظیم نشده)'} | "
              f"آدرس: <code>/webhooks/stard</code>",
-             f"Received: {sum(counts.values()):,} | Processed: {counts.get('processed', 0):,} | "
-             f"Failed: {counts.get('failed', 0):,} | Rejected: {counts.get('rejected', 0):,} | Retried: {retried:,}\n"]
+             f"دریافتی: {sum(counts.values()):,} | پردازش‌شده: {counts.get('processed', 0):,} | "
+             f"ناموفق: {counts.get('failed', 0):,} | ردشده: {counts.get('rejected', 0):,} | تکراری: {retried:,}\n"]
     icon = {"processed": "✅", "failed": "❌", "rejected": "⛔️", "received": "⏳"}
     for r in rows:
         lines.append(f"{icon.get(r['status'], '•')} <code>{r['received_at'][5:16]}</code> {escape(r['type'])} "
@@ -692,11 +696,11 @@ async def queue_view(cb: CallbackQuery, db: Database, queue: JobQueue = None, se
     queue = queue or JobQueue(db, settings.instance_id)
     q = await queue.stats()
     workers = [i for i in (await services_status(db)).get("worker", []) if i["alive"]]
-    lines = ["📬 <b>Queue Monitor</b>\n",
-             f"Queue Length: {q['queued']:,} (آماده: {q['ready']:,})", f"Processing: {q['running']:,}",
-             f"Completed: {q['done']:,}", f"Failed (dead): {q['dead']:,}", f"Retry: {q['retrying']:,}",
-             f"Worker Count: {len(workers)}", f"Worker Lag: {human_duration(q['lag_seconds'])}",
-             f"Lease منقضی (worker کرش‌کرده): {q['stale']:,}\n"]
+    lines = ["📬 <b>صف کارها</b>\n",
+             f"در صف: {q['queued']:,} (آماده: {q['ready']:,})", f"در حال اجرا: {q['running']:,}",
+             f"انجام‌شده: {q['done']:,}", f"متوقف‌شده: {q['dead']:,}", f"در انتظار تلاش دوباره: {q['retrying']:,}",
+             f"تعداد worker: {len(workers)}", f"تأخیر صف: {human_duration(q['lag_seconds'])}",
+             f"کار رهاشده (worker کرش‌کرده): {q['stale']:,}\n"]
     if q["by_kind"]:
         lines.append("<b>به تفکیک نوع</b>")
         lines += [f"• {r['kind']}: {r['status']} × {r['n']}" for r in q["by_kind"]]
@@ -706,7 +710,7 @@ async def queue_view(cb: CallbackQuery, db: Database, queue: JobQueue = None, se
         lines.append("\n<b>آخرین کارهای dead</b>")
         for j in dead:
             lines.append(f"☠️ #{j['id']} {j['kind']} ({j['attempts']} تلاش): {escape(redact(j['last_error'] or '')[:90])}")
-            b.button(text=f"🔁 Retry #{j['id']}", callback_data=Op(a="qr", v=str(j["id"])))
+            b.button(text=f"🔁 تلاش دوباره #{j['id']}", callback_data=Op(a="qr", v=str(j["id"])))
     bc = await db.all("SELECT * FROM broadcasts ORDER BY id DESC LIMIT 3")
     if bc:
         lines.append("\n<b>📢 پیام‌های همگانی</b>")
@@ -735,7 +739,7 @@ async def security_view(cb: CallbackQuery, db: Database, settings: Settings):
     await cb.answer("⏳ در حال اسکن…")
     findings = await security_scan(settings, db)
     counts = {s: sum(f.severity == s for f in findings) for s in SEVERITY}
-    lines = ["🛡 <b>Security Scanner</b>\n", " | ".join(f"{SEVERITY[s]}: {n}" for s, n in counts.items()), ""]
+    lines = ["🛡 <b>بررسی امنیتی</b>\n", " | ".join(f"{SEVERITY[s]}: {n}" for s, n in counts.items()), ""]
     for f in findings:
         lines.append(f"{SEVERITY[f.severity]} — <b>{escape(f.title)}</b>" + (f"\n   {escape(f.detail)}" if f.detail else ""))
     if not findings:
@@ -748,14 +752,14 @@ async def security_view(cb: CallbackQuery, db: Database, settings: Settings):
 @router.callback_query(Op.filter(F.a == "dbs"))
 async def db_view(cb: CallbackQuery, db: Database):
     st = await db_stats(db)
-    lines = ["📊 <b>DB Statistics</b>\n", f"نوع: {st['dialect']} | Database Size: {human_bytes(st['size'])}",
-             f"Users: {st['users']:,} | Orders: {st['orders']:,} | Transactions (topups): {st['topups']:,}",
-             f"Ledger Entries: {st['ledger']:,} | Failed Orders: {st['failed_orders']:,} | "
-             f"Active Orders: {st['active_orders']:,}", "", "<b>Table Sizes</b>"]
+    lines = ["📊 <b>آمار پایگاه داده</b>\n", f"نوع: {st['dialect']} | حجم: {human_bytes(st['size'])}",
+             f"کاربران: {st['users']:,} | سفارش‌ها: {st['orders']:,} | شارژها: {st['topups']:,}",
+             f"ردیف‌های دفتر کل: {st['ledger']:,} | سفارش ناموفق: {st['failed_orders']:,} | "
+             f"سفارش در جریان: {st['active_orders']:,}", "", "<b>اندازه‌ی جدول‌ها</b>"]
     for name, t in sorted(st["tables"].items(), key=lambda x: -(x[1].get("rows") or 0)):
         lines.append(f"• {name}: {t.get('rows') if t.get('rows') is not None else '?'} ردیف"
                      + (f" | {human_bytes(t['bytes'])}" if t.get("bytes") else ""))
-    lines.append(f"\n<b>Indexes</b>: {sum(len(v) for v in st['indexes'].values())}")
+    lines.append(f"\n<b>ایندکس‌ها</b>: {sum(len(v) for v in st['indexes'].values())}")
     lines += [f"• {t}: {', '.join(v)}" for t, v in st["indexes"].items() if v][:15]
     await edit_or_send(cb.message, "\n".join(lines)[:4000], back_to(MENU))
     await cb.answer()
@@ -766,14 +770,14 @@ async def deps_view(cb: CallbackQuery):
     await cb.answer("⏳ بررسی PyPI…")
     r = await dependency_report()
     icon = {"ok": "🟢", "outdated": "🟡", "missing": "🔴"}
-    lines = ["📦 <b>Dependency Checker</b>\n", f"Python: {r['python']} {'🟢' if r['python_ok'] else '🔴 (حداقل 3.11)'}",
+    lines = ["📦 <b>بررسی کتابخانه‌ها</b>\n", f"Python: {r['python']} {'🟢' if r['python_ok'] else '🔴 (حداقل 3.11)'}",
              f"Node: {r['node']}", f"Docker Image: {escape(r['docker_base'] or '—')}", "",
-             "<b>Packages</b> (فعلی → آخرین)"]
+             "<b>کتابخانه‌ها</b> (فعلی → آخرین)"]
     for p in r["packages"]:
         lines.append(f"{icon[p['status']]} {p['name']}: {p['current'] or '—'} → {p['latest'] or '?'}")
-    lines.append("\n<b>System Dependencies</b>")
+    lines.append("\n<b>ابزارهای سیستم</b>")
     lines += [f"{'🟢' if ok else '⚪️'} {tool}" for tool, ok in r["system"].items()]
-    lines.append("\nوضعیت امنیتی وابستگی‌ها: 🛡 Security Scanner (با pip-audit)")
+    lines.append("\nوضعیت امنیتی کتابخانه‌ها: 🛡 بررسی امنیتی (با pip-audit)")
     await edit_or_send(cb.message, "\n".join(lines), back_to(MENU))
 
 
@@ -782,7 +786,7 @@ async def deps_view(cb: CallbackQuery):
 async def audit_view(cb: CallbackQuery, callback_data: Op, db: Database):
     page = int(callback_data.v or 0)
     rows = await db.audit_entries(limit=15, offset=page * 15)
-    lines = ["📋 <b>Audit Log</b> — همه‌ی کارهای حساس مدیرها و سیستم\n"]
+    lines = ["📋 <b>گزارش رویدادها</b> — همه‌ی کارهای حساس مدیرها و سیستم\n"]
     for r in rows:
         who = f"👮 {r['admin_id']}" if r["admin_id"] else "🤖 سیستم"
         tail = " | ".join(x for x in (
@@ -858,10 +862,10 @@ async def threshold_set(message: Message, state: FSMContext, db: Database):
 async def maintenance_view(cb: CallbackQuery, shop: Shop):
     on, msg = await shop.maintenance()
     b = InlineKeyboardBuilder()
-    b.button(text="🟢 خاموش کردن Maintenance" if on else "🧹 روشن کردن Maintenance", callback_data=Op(a="maint!"))
-    b.button(text="✏️ متن پیام Maintenance", callback_data=Op(a="mainttxt"))
+    b.button(text="🟢 خاموش کردن حالت تعمیر" if on else "🧹 روشن کردن حالت تعمیر", callback_data=Op(a="maint!"))
+    b.button(text="✏️ متن پیام حالت تعمیر", callback_data=Op(a="mainttxt"))
     b.adjust(1)
-    await edit_or_send(cb.message, f"🧹 <b>Maintenance Mode</b>\n\nوضعیت: {'🔴 روشن' if on else '🟢 خاموش'}\n\n"
+    await edit_or_send(cb.message, f"🧹 <b>حالت تعمیر</b>\n\nوضعیت: {'🔴 روشن' if on else '🟢 خاموش'}\n\n"
                                    "در این حالت فروش متوقف می‌شود و کاربران فقط پیام زیر را می‌بینند؛ مدیرها همه‌چیز را "
                                    "می‌بینند و مدیریت می‌کنند. سفارش‌های در جریان همچنان پیگیری و تحویل می‌شوند.\n\n"
                                    f"پیام:\n{escape(msg)}", back_to(HOME, b))
@@ -874,15 +878,15 @@ async def maintenance_toggle(cb: CallbackQuery, db: Database, shop: Shop):
     await db.set_setting("maintenance", "0" if on else "1")
     await db.audit(admin_id=cb.from_user.id, action="maintenance", after={"on": not on})
     if await notify.enabled(db, "maintenance"):
-        await notify.to_log_channel(cb.bot, db, "🧹 Maintenance روشن شد؛ فروش متوقف است." if not on else
-                                    "🟢 Maintenance خاموش شد؛ فروش ادامه دارد.")
+        await notify.to_log_channel(cb.bot, db, "🧹 حالت تعمیر روشن شد؛ فروش متوقف است." if not on else
+                                    "🟢 حالت تعمیر خاموش شد؛ فروش ادامه دارد.")
     await maintenance_view(cb, shop)
 
 
 @router.callback_query(Op.filter(F.a == "mainttxt"))
 async def maintenance_text_ask(cb: CallbackQuery, state: FSMContext):
     await state.set_state(OpsForm.maint_text)
-    await cb.message.answer("✏️ متن پیام Maintenance را بفرستید:", reply_markup=cancel_menu())
+    await cb.message.answer("✏️ متن پیام حالت تعمیر را بفرستید:", reply_markup=cancel_menu())
     await cb.answer()
 
 

@@ -40,7 +40,7 @@ NOTIFY_KINDS = {
     "discount": "🎟 پیشنهاد/تخفیف اختصاصی (به کاربر)",
     "comeback": "💤 دعوت به بازگشت کاربر غیرفعال",
     "offer_ending": "⏰ یادآوری پایان پیشنهاد (به کاربر)",
-    "maintenance": "🧹 اطلاع Maintenance (کانال گزارش)",
+    "maintenance": "🧹 اطلاع حالت تعمیر (کانال گزارش)",
     "update": "🔄 نتیجه‌ی به‌روزرسانی (به مدیر)",
 }
 INACTIVE_BUCKETS = (7, 14, 30, 60)
@@ -88,10 +88,10 @@ def parse_when(token: str | None, base: datetime | None = None) -> str | None:
 @router.callback_query(SA.filter(F.a == "menu"))
 async def shop_menu(cb: CallbackQuery):
     await edit_or_send(cb.message, "🛍 <b>مدیریت فروشگاه</b>", section([
-        ("🎛 مدیریت دکمه‌ها", SA(a="btn")), ("🚩 Feature Flags", SA(a="flags")),
-        ("🏷 قیمت‌گذاری و Flash Sale", SA(a="rules")), ("📦 موجودی و محدودیت خرید", SA(a="ctl")),
+        ("🎛 مدیریت دکمه‌ها", SA(a="btn")), ("🚩 روشن/خاموش قابلیت‌ها", SA(a="flags")),
+        ("🏷 قیمت‌گذاری و حراج", SA(a="rules")), ("📦 موجودی و محدودیت خرید", SA(a="ctl")),
         ("👑 VIP", SA(a="vip")), ("🎟 کد تخفیف", Adm(name="coupons")),
-        ("🎁 پاداش روزانه و گردونه", SA(a="rew")), ("🧪 Test Mode", SA(a="tm")),
+        ("🎁 پاداش روزانه و گردونه", SA(a="rew")), ("🧪 حالت آزمایشی", SA(a="tm")),
         ("🔗 دسته‌های Stard", SA(a="slug")), ("💰 درصد سود", Adm(name="profit")),
     ]))
     await cb.answer()
@@ -103,7 +103,7 @@ async def marketing_menu(cb: CallbackQuery):
         ("📢 پیام همگانی", Adm(name="broadcast")), ("💤 کاربران غیرفعال", SA(a="inact")),
         ("🎁 زیرمجموعه‌گیری", Adm(name="ref")), ("📣 جوین اجباری", Adm(name="join")),
         ("💹 قیمت در گروه", Adm(name="group")), ("🔔 اعلان‌های هوشمند", SA(a="ntf")),
-        ("🛡 ریسک و Ban خودکار", SA(a="risk")),
+        ("🛡 ریسک و مسدودسازی خودکار", SA(a="risk")),
     ]))
     await cb.answer()
 
@@ -121,8 +121,8 @@ async def buttons_view(cb: CallbackQuery, shop: Shop):
         b.button(text="⬇️", callback_data=SA(a="bt", v=f"{k}|d"))
     b.adjust(*([5] * len(btns)))
     await edit_or_send(cb.message, "🎛 <b>مدیریت دکمه‌های فروشگاه</b>\n\n🟢 فعال / 🔴 غیرفعال (دیده می‌شود با 🔒 ولی خریدنی "
-                                   "نیست)\n👁️ نمایش / 🙈 مخفی\n⬆️⬇️ ترتیب\n\nبخشی که Feature Flag آن خاموش باشد، هرگز "
-                                   "نمایش داده نمی‌شود (🚩 Feature Flags).", back_to(MENU, b))
+                                   "نیست)\n👁️ نمایش / 🙈 مخفی\n⬆️⬇️ ترتیب\n\nبخشی که قابلیتش خاموش باشد، هرگز "
+                                   "نمایش داده نمی‌شود (🚩 روشن/خاموش قابلیت‌ها).", back_to(MENU, b))
     await cb.answer()
 
 
@@ -146,7 +146,7 @@ async def button_action(cb: CallbackQuery, callback_data: SA, shop: Shop):
         await f.move_button(key, -1 if op == "u" else 1, admin_id=cb.from_user.id)
     elif op == "i":
         on, pct = (await f.all())[CATEGORY_FLAG[key]]
-        await cb.answer(f"{CATEGORIES[key]}\nFeature Flag: {'روشن' if on else 'خاموش'} ({pct}%)", show_alert=True)
+        await cb.answer(f"{CATEGORIES[key]}\nقابلیت: {'روشن' if on else 'خاموش'} ({pct}%)", show_alert=True)
         return
     await buttons_view(cb, shop)
 
@@ -154,7 +154,7 @@ async def button_action(cb: CallbackQuery, callback_data: SA, shop: Shop):
 # ---------- Feature Flags ----------
 async def _flags_view(cb: CallbackQuery, shop: Shop):
     b = InlineKeyboardBuilder()
-    lines = ["🚩 <b>Feature Flags</b>\n", "روشن/خاموش و درصد Rollout (هر کاربر با hash ثابت همیشه داخل یا بیرون است).\n"]
+    lines = ["🚩 <b>روشن/خاموش قابلیت‌ها</b>\n", "روشن/خاموش و درصد کاربرانی که می‌بینند (هر کاربر با hash ثابت همیشه داخل یا بیرون است).\n"]
     for key, label, on, pct in describe_flags(await shop.features.all()):
         lines.append(f"{'🟢' if on else '🔴'} {label} <code>{key}</code> — {pct}%")
         b.button(text=f"{'🟢' if on else '🔴'} {label}", callback_data=SA(a="fl", v=f"{key}|t"))
@@ -188,10 +188,10 @@ async def flag_action(cb: CallbackQuery, callback_data: SA, shop: Shop):
 async def _rules_view(shop: Shop) -> tuple[str, object]:
     rules = await shop.commerce.rules()
     t = now()
-    lines = ["🏷 <b>قیمت‌گذاری پویا و Flash Sale</b>\n",
+    lines = ["🏷 <b>قیمت‌گذاری پویا و حراج</b>\n",
              "قیمت = سود بخش ± قانون‌های فعال − تخفیف VIP؛ هرگز کمتر از قیمت خرید از Stard.\n"]
     b = InlineKeyboardBuilder()
-    b.button(text="⚡️ Flash Sale سریع", callback_data=SA(a="flash"))
+    b.button(text="⚡️ حراج سریع", callback_data=SA(a="flash"))
     b.button(text="➕ قانون قیمت", callback_data=SA(a="rule+"))
     for r in rules:
         live = r["active"] and (not r["starts_at"] or r["starts_at"] <= t) and (not r["ends_at"] or r["ends_at"] > t)
@@ -230,7 +230,7 @@ async def rule_action(cb: CallbackQuery, callback_data: SA, shop: Shop):
 @router.callback_query(SA.filter(F.a == "flash"))
 async def flash_ask(cb: CallbackQuery, state: FSMContext):
     await state.set_state(ShopForm.flash)
-    await cb.message.answer("⚡️ <b>Flash Sale</b>: به شکل <code>بخش درصد_تخفیف ساعت</code> بفرستید.\n"
+    await cb.message.answer("⚡️ <b>حراج</b>: به شکل <code>بخش درصد_تخفیف ساعت</code> بفرستید.\n"
                             "مثال: <code>stars 10 6</code> = ۱۰٪ تخفیف استارز برای ۶ ساعت از همین الان\n"
                             "بخش‌ها: " + ", ".join(f"<code>{k}</code>" for k in CATEGORIES) + ", <code>all</code>",
                             reply_markup=cancel_menu())
@@ -244,11 +244,11 @@ async def flash_set(message: Message, state: FSMContext, shop: Shop):
     if len(p) != 3 or (p[0] not in CATEGORIES and p[0] != "all") or pct is None or not 0 < pct <= 90 or not hours:
         await message.answer("❗️ مثال: stars 10 6")
         return
-    rid = await shop.commerce.add_rule(name=f"Flash {p[0]} {pct:g}%", percent=-pct,
+    rid = await shop.commerce.add_rule(name=f"حراج {p[0]} {pct:g}%", percent=-pct,
                                        category=None if p[0] == "all" else p[0], starts_at=now(),
                                        ends_at=parse_when(f"+{hours}h"), admin_id=message.from_user.id)
     await state.set_state(None)
-    await message.answer(f"⚡️ Flash Sale #{rid} فعال شد: {pct:g}% تخفیف تا {hours} ساعت.", reply_markup=main_menu(True))
+    await message.answer(f"⚡️ حراج #{rid} فعال شد: {pct:g}% تخفیف تا {hours} ساعت.", reply_markup=main_menu(True))
 
 
 @router.callback_query(SA.filter(F.a == "rule+"))
@@ -435,7 +435,7 @@ async def rewards(cb: CallbackQuery, db: Database, shop: Shop):
              f"{fmt_toman(st.get('spin', {}).get('s', 0))}",
              "جایزه‌ها: " + ", ".join(f"{fmt_toman(int(p['amount']))} ({int(p['weight']) * 100 // total_w}%)" for p in prizes),
              f"میانگین هزینه‌ی هر چرخش: {fmt_toman(sum(int(p['amount']) * int(p['weight']) for p in prizes) // total_w)}",
-             "\nروشن/خاموش کردن: 🚩 Feature Flags (daily_reward و spin). هر کاربر روزی یک بار."]
+             "\nروشن/خاموش کردن: 🚩 روشن/خاموش قابلیت‌ها (پاداش روزانه و گردونه). هر کاربر روزی یک بار."]
     b = InlineKeyboardBuilder()
     b.button(text="✏️ مبلغ پاداش روزانه", callback_data=SA(a="rewa"))
     b.button(text="✏️ جایزه‌های گردونه", callback_data=SA(a="spin"))
@@ -501,7 +501,7 @@ async def test_mode(cb: CallbackQuery, callback_data: SA, db: Database, shop: Sh
         b.button(text=("• " if v == mode else "") + label, callback_data=SA(a="tms", v=v))
     b.adjust(1)
     await edit_or_send(cb.message,
-                       "🧪 <b>Test Mode</b>\n\nدر Test Mode سفارش‌ها به جای Stard API با یک شبیه‌ساز داخلی انجام می‌شوند: "
+                       "🧪 <b>حالت آزمایشی</b>\n\nدر حالت آزمایشی سفارش‌ها به جای Stard API با یک شبیه‌ساز داخلی انجام می‌شوند: "
                        "هیچ درخواستی به API واقعی نمی‌رود و هیچ پول واقعی از کیف پول Stard خرج نمی‌شود. کل جریان "
                        "(کسر موجودی داخلی، صف، پیگیری، تحویل بعد از ۱۵ ثانیه، اعلان) مثل واقعی اجرا می‌شود.\n"
                        "سفارش‌های آزمایشی علامت‌دار و از همه‌ی آمار و گزارش‌های مالی حذف‌اند.\n\n"
@@ -674,15 +674,15 @@ async def risk_view(cb: CallbackQuery, callback_data: SA, db: Database, risk: Ri
     elif callback_data.a == "riskr" and callback_data.v:
         await risk.reset(int(callback_data.v), admin_id=cb.from_user.id)
     r = await risk.rules()
-    lines = ["🛡 <b>ریسک و Ban خودکار</b>\n",
-             f"Ban خودکار: {'🟢 روشن' if r['enabled'] else '🔴 خاموش'} | آستانه: {r['threshold']} | حداقل انواع رفتار: "
+    lines = ["🛡 <b>ریسک و مسدودسازی خودکار</b>\n",
+             f"مسدودسازی خودکار: {'🟢 روشن' if r['enabled'] else '🔴 خاموش'} | آستانه: {r['threshold']} | حداقل انواع رفتار: "
              f"{r['min_kinds']} | بازه: {r['window_hours']} ساعت",
-             "کاربر فقط وقتی Ban می‌شود که هم امتیاز از آستانه بگذرد و هم چند نوع رفتار متفاوت داشته باشد؛ مدیرها هرگز. "
-             "شواهد قبل از Ban در Audit Log ثبت می‌شود.\n", "<b>وزن رفتارها</b>"]
+             "کاربر فقط وقتی مسدود می‌شود که هم امتیاز از آستانه بگذرد و هم چند نوع رفتار متفاوت داشته باشد؛ مدیرها هرگز. "
+             "شواهد قبل از مسدودسازی در گزارش رویدادها ثبت می‌شود.\n", "<b>وزن رفتارها</b>"]
     lines += [f"• {label}: {w}" for w, label in EVENTS.values()]
     top = await risk.top(10)
     b = InlineKeyboardBuilder()
-    b.button(text="🔴 خاموش کردن Ban خودکار" if r["enabled"] else "🟢 روشن کردن Ban خودکار", callback_data=SA(a="riskt"))
+    b.button(text="🔴 خاموش کردن مسدودسازی خودکار" if r["enabled"] else "🟢 روشن کردن مسدودسازی خودکار", callback_data=SA(a="riskt"))
     b.button(text="✏️ آستانه‌ها", callback_data=SA(a="riske"))
     if top:
         lines.append("\n<b>پرریسک‌ترین کاربران</b>")

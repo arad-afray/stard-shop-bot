@@ -201,11 +201,19 @@ def _short(e: BaseException) -> str:
     return redact(msg)[:200]
 
 
+CHECK_LABELS = {"Bot": "ربات", "API": "API استارد", "Database": "پایگاه داده", "Worker": "پردازشگر صف",
+                "Redis": "Redis", "Queue": "صف کارها", "Storage": "فضای ذخیره", "External Services": "سرویس‌های بیرونی"}
+
+
+def check_label(name: str) -> str:
+    return CHECK_LABELS.get(name, name)
+
+
 def format_checks(checks: list[Check]) -> str:
     lines = []
     for c in checks:
         lat = f" | {c.latency_ms:.0f}ms" if c.latency_ms is not None else ""
-        lines.append(f"{ICON.get(c.status, '⚪️')} <b>{c.name}</b>{lat}"
+        lines.append(f"{ICON.get(c.status, '⚪️')} <b>{check_label(c.name)}</b>{lat}"
                      + (f"\n   {c.detail}" if c.detail else "")
                      + (f"\n   ⚠️ {c.error}" if c.error else "")
                      + f"\n   🕒 {c.checked_at[11:19]} UTC")
@@ -225,7 +233,7 @@ ALERT_TEXT = {
     "refund_spike": "↩️ افزایش نرخ برگشت پول",
     "api_latency": "🐢 تأخیر بالای Stard API",
     "queue_lag": "📬 صف کارها عقب افتاده است",
-    "dead_jobs": "☠️ کارهای ناموفق (Dead Letter) زیاد شده‌اند",
+    "dead_jobs": "☠️ کارهای متوقف‌شده زیاد شده‌اند",
     "wallet_low": "🏦 موجودی کیف پول Stard کم است",
 }
 

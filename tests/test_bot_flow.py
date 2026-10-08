@@ -61,9 +61,9 @@ async def test_admin_sets_profit_and_bans(env):
     await send(dp, bot, ADMIN, "/start")
     await send(dp, bot, CUSTOMER, "/start")
     await send(dp, bot, CUSTOMER, "/admin")
-    assert "COMMAND CENTER" not in session.texts()[-1]
+    assert "مرکز فرمان" not in session.texts()[-1]
     await send(dp, bot, ADMIN, "⚙️ پنل مدیریت")
-    assert "COMMAND CENTER" in session.texts()[-1]
+    assert "مرکز فرمان" in session.texts()[-1]
     await click(dp, bot, ADMIN, Adm(name="pset", arg="stars"))
     await send(dp, bot, ADMIN, "۲۵")
     assert await db.get_setting("profit:stars") == "25.0"
@@ -239,7 +239,7 @@ async def test_owner_adds_admin(env):
     await click(dp, bot, ADMIN, Adm(name="adm_add"))
     await send(dp, bot, ADMIN, str(CUSTOMER))
     await send(dp, bot, CUSTOMER, "/admin")
-    assert "COMMAND CENTER" in session.texts()[-1]
+    assert "مرکز فرمان" in session.texts()[-1]
     # مدیر غیرمالک نمی‌تواند مدیر اضافه کند
     await click(dp, bot, CUSTOMER, Adm(name="adm_add"))
     assert "فقط مالک" in session.alerts()[-1]

@@ -87,7 +87,7 @@ async def open_shop(message: Message, state: FSMContext, shop: Shop, is_admin: b
     if not buttons:
         await message.answer("فعلاً محصولی برای فروش فعال نیست.")
         return
-    test = "\n\n🧪 <i>Test Mode: سفارش‌ها آزمایشی‌اند و پول واقعی خرج نمی‌شود.</i>" if await shop.is_test_for(is_admin) else ""
+    test = "\n\n🧪 <i>حالت آزمایشی: سفارش‌ها آزمایشی‌اند و پول واقعی خرج نمی‌شود.</i>" if await shop.is_test_for(is_admin) else ""
     await message.answer(SHOP_TEXT + test, reply_markup=shop_menu(buttons))
 
 
@@ -135,7 +135,7 @@ async def navigate(cb: CallbackQuery, callback_data: Nav, state: FSMContext, sho
         elif to == "reaction":
             unit, _ = await shop.price("reaction", int((await shop.rates(test))["star"]["amount"]) * 100, user=user)
             await edit_or_send(cb.message,
-                               "❤️ <b>ریکشن استارزی (Paid Reaction)</b>\n\n"
+                               "❤️ <b>ریکشن استارزی </b>\n\n"
                                "ریکشن ⭐ روی پست کانال شما زده می‌شود.\n"
                                f"💵 هر ۱۰۰ ریکشن حدود {fmt_toman(unit)}\n\nتعداد را انتخاب کنید:", reaction_menu())
         else:
@@ -381,7 +381,7 @@ async def _show_confirm(message: Message, state: FSMContext, user: User, note: s
                               "از «💳 شارژ کیف پول» شارژ کنید.")
     manual = "\n🧑‍💻 این سفارش توسط پشتیبانی انجام می‌شود." if o["category"] == "reaction" else \
         "\nدر صورت تأیید، مبلغ از کیف پول کسر و سفارش خودکار انجام می‌شود."
-    test = "\n🧪 <b>سفارش آزمایشی (Test Mode)</b> — هیچ خرید واقعی انجام نمی‌شود." if o.get("is_test") else ""
+    test = "\n🧪 <b>سفارش آزمایشی</b> — هیچ خرید واقعی انجام نمی‌شود." if o.get("is_test") else ""
     await message.answer(
         f"{note}🧾 <b>پیش‌فاکتور</b>{test}\n\n"
         f"📦 محصول: {escape(o['title'])}\n"

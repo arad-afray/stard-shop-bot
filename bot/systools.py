@@ -19,7 +19,7 @@ from .db import Database
 from .logging_setup import _PATTERNS, LOG_FILE
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SEVERITY = {"critical": "🔴 Critical", "high": "🟠 High", "medium": "🟡 Medium", "low": "🔵 Low"}
+SEVERITY = {"critical": "🔴 بحرانی", "high": "🟠 زیاد", "medium": "🟡 متوسط", "low": "🔵 کم"}
 SEV_ORDER = ["critical", "high", "medium", "low"]
 
 
@@ -44,11 +44,11 @@ async def security_scan(settings: Any, db: Database, *, run_pip_audit: bool = Tr
     if not key.startswith(("sk_live_", "sk_test_")):
         f.append(Finding("high", "قالب STARD_API_KEY نامعتبر است"))
     if s.log_level.upper() == "DEBUG":
-        f.append(Finding("medium", "حالت Debug روشن است", "LOG_LEVEL=DEBUG لاگ زیادی تولید می‌کند؛ در Production INFO بگذارید."))
+        f.append(Finding("medium", "حالت اشکال‌زدایی (Debug) روشن است", "LOG_LEVEL=DEBUG لاگ زیادی تولید می‌کند؛ در Production INFO بگذارید."))
     if s.role == "bot" and not s.redis_url:
         f.append(Finding("high", "ROLE=bot بدون Redis", "با چند نمونه‌ی ربات، حالت خرید (FSM) بین نمونه‌ها مشترک نیست."))
     if not s.database_url and key.startswith("sk_live_"):
-        f.append(Finding("medium", "Production روی SQLite", "برای مقیاس بالا DATABASE_URL (PostgreSQL) را تنظیم کنید."))
+        f.append(Finding("medium", "نسخه‌ی اصلی روی SQLite", "برای مقیاس بالا DATABASE_URL (PostgreSQL) را تنظیم کنید."))
     loopback = s.http_host in ("127.0.0.1", "localhost", "::1")
     if s.http_enabled and not loopback:
         keys = await db.scalar("SELECT COUNT(*) FROM api_keys WHERE revoked_at IS NULL")
@@ -242,17 +242,17 @@ async def api_diagnostics(api: Any, metrics: Any = None) -> list[tuple[str, str,
     if metrics is not None:
         p50, p95 = metrics.api_latency.pct(50), metrics.api_latency.pct(95)
         if p95 is not None:
-            out.append(("Latency (5m)", "ok" if p95 < 3 else "warn", f"p50 {p50 * 1000:.0f}ms | p95 {p95 * 1000:.0f}ms"))
+            out.append(("تأخیر (۵ دقیقه)", "ok" if p95 < 3 else "warn", f"p50 {p50 * 1000:.0f}ms | p95 {p95 * 1000:.0f}ms"))
         rl = metrics.rate_limit
         if rl:
-            out.append(("Rate Limit", "ok" if int(rl.get("x-ratelimit-remaining", 1) or 1) > 5 else "warn",
+            out.append(("محدودیت درخواست", "ok" if int(rl.get("x-ratelimit-remaining", 1) or 1) > 5 else "warn",
                         f"{rl.get('x-ratelimit-remaining', '?')}/{rl.get('x-ratelimit-limit', '?')} باقی‌مانده"))
         errs = [e for e in metrics.api_errors if time.time() - e[0] < 3600]
-        out.append(("Errors (1h)", "ok" if not errs else ("warn" if len(errs) < 10 else "fail"),
+        out.append(("خطاها (۱ ساعت)", "ok" if not errs else ("warn" if len(errs) < 10 else "fail"),
                     f"{len(errs)}" + (f" — آخرین: {errs[-1][1]}" if errs else "")))
     try:
         ver = await api.openapi_version()
-        out.append(("API Version", "ok" if ver else "warn", ver or "نامشخص"))
+        out.append(("نسخه‌ی API", "ok" if ver else "warn", ver or "نامشخص"))
     except Exception:
-        out.append(("API Version", "warn", "نامشخص"))
+        out.append(("نسخه‌ی API", "warn", "نامشخص"))
     return out

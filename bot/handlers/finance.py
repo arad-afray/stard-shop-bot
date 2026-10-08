@@ -41,10 +41,10 @@ class FinForm(StatesGroup):
 
 @router.callback_query(Fn.filter(F.a == "menu"))
 async def fin_menu(cb: CallbackQuery):
-    await edit_or_send(cb.message, "💵 <b>مالی</b>\n\nهمه‌ی ارقام بدون سفارش‌های Test Mode.", section([
+    await edit_or_send(cb.message, "💵 <b>مالی</b>\n\nهمه‌ی ارقام بدون سفارش‌های آزمایشی.", section([
         ("📈 داشبورد درآمد", Fn(a="rev", v="daily")), ("💰 داشبورد سود", Fn(a="profit", v="month")),
-        ("📒 Ledger", Fn(a="ledger")), ("🔎 جستجوی تراکنش", Fn(a="tx")),
-        ("↩️ Refund Center", Fn(a="ref")), ("⚠️ Failed Payments", Fn(a="failed")),
+        ("📒 دفتر کل", Fn(a="ledger")), ("🔎 جستجوی تراکنش", Fn(a="tx")),
+        ("↩️ مرکز برگشت پول", Fn(a="ref")), ("⚠️ پرداخت‌های ناموفق", Fn(a="failed")),
         ("📄 گزارش مالی", Fn(a="rep")), ("🧮 ماشین‌حساب کارمزد", Fn(a="fee")),
     ]))
     await cb.answer()
@@ -87,16 +87,16 @@ async def profit(cb: CallbackQuery, callback_data: Fn, db: Database):
     s = await finance.summary(db, a, b)
     f = await finance.fees(db)
     text = (f"💰 <b>داشبورد سود</b> — {label}\n\n"
-            f"Gross Revenue (درآمد ناخالص): <b>{fmt_toman(s.revenue)}</b>\n"
-            f"Cost (خرید از Stard): {fmt_toman(s.cost)}\n"
-            f"Fees (کارمزدها): {fmt_toman(s.fees)}  "
+            f"درآمد ناخالص: <b>{fmt_toman(s.revenue)}</b>\n"
+            f"هزینه‌ی خرید از Stard: {fmt_toman(s.cost)}\n"
+            f"کارمزدها: {fmt_toman(s.fees)}  "
             f"<i>(تلگرام {f['telegram_percent']}% + API {f['api_percent']}% + پرداخت {f['payment_percent']}% + "
             f"{int(f['payment_fixed']):,} ثابت)</i>\n"
-            f"Payouts (زیرمجموعه و پاداش): {fmt_toman(s.payouts)}\n"
-            f"Refund (برگشتی، جدا از درآمد): {fmt_toman(s.refunds)} در {s.refunded_orders:,} سفارش\n"
+            f"پرداختی (زیرمجموعه و پاداش): {fmt_toman(s.payouts)}\n"
+            f"برگشتی (جدا از درآمد): {fmt_toman(s.refunds)} در {s.refunded_orders:,} سفارش\n"
             f"──────────\n"
             f"سود ناخالص: {fmt_toman(s.gross_profit)}\n"
-            f"<b>Net Profit (سود خالص واقعی): {fmt_toman(s.net_profit)}</b>\n"
+            f"<b>سود خالص واقعی: {fmt_toman(s.net_profit)}</b>\n"
             f"حاشیه‌ی سود: {s.margin}%")
     cats = await db.all("SELECT category, COALESCE(SUM(price), 0) AS rev, COALESCE(SUM(price - base_amount), 0) AS p, "
                         "COUNT(*) AS n FROM orders WHERE status = 'completed' AND is_test = 0 AND created_at >= :a "
@@ -123,7 +123,7 @@ def _ledger_lines(rows: list[dict]) -> list[str]:
 async def _ledger_view(state: FSMContext, db: Database, page: int = 0) -> tuple[str, object]:
     q = (await state.get_data()).get("ledger_q", "")
     rows = await finance.ledger_search(db, q, limit=20, offset=page * 20)
-    lines = ["📒 <b>Ledger</b> — دفتر کل همه‌ی تغییرات موجودی" + (f"\nفیلتر: <code>{escape(q)}</code>" if q else "") + "\n"]
+    lines = ["📒 <b>دفتر کل</b> — همه‌ی تغییرات موجودی" + (f"\nفیلتر: <code>{escape(q)}</code>" if q else "") + "\n"]
     lines += _ledger_lines(rows) or ["— موردی نیست —"]
     b = InlineKeyboardBuilder()
     b.button(text="🔎 جستجو / فیلتر", callback_data=Fn(a="lq"))
@@ -170,7 +170,7 @@ async def ledger_query(message: Message, state: FSMContext, db: Database):
 @router.callback_query(Fn.filter(F.a == "tx"))
 async def tx_ask(cb: CallbackQuery, state: FSMContext):
     await state.set_state(FinForm.tx)
-    await cb.message.answer("🔎 <b>جستجوی تراکنش</b> (سفارش‌ها + Ledger)\n" + SEARCH_HELP, reply_markup=cancel_menu())
+    await cb.message.answer("🔎 <b>جستجوی تراکنش</b> (سفارش‌ها + دفتر کل)\n" + SEARCH_HELP, reply_markup=cancel_menu())
     await cb.answer()
 
 
@@ -187,7 +187,7 @@ async def tx_search(message: Message, state: FSMContext, db: Database):
     lines = [f"🔎 نتیجه‌ی <code>{escape(q)}</code>\n", "<b>سفارش‌ها</b>"]
     lines += [f"#{o['id']} 🆔{o['user_id']} {escape(o['title'][:30])} | {STATUS_LABEL.get(o['status'], o['status'])} | "
               f"{fmt_toman(o['price'])} | {o['created_at'][:16].replace('T', ' ')}" for o in orders] or ["—"]
-    lines += ["", "<b>تراکنش‌ها (Ledger)</b>"] + (_ledger_lines(led) or ["—"])
+    lines += ["", "<b>تراکنش‌ها (دفتر کل)</b>"] + (_ledger_lines(led) or ["—"])
     await message.answer("\n".join(lines)[:4000], reply_markup=main_menu(True))
 
 
@@ -198,8 +198,8 @@ async def refund_center(cb: CallbackQuery, callback_data: Fn, db: Database):
     counts = await finance.refund_counts(db)
     rows = await finance.refunds(db, status, 15)
     head = " | ".join(f"{lbl}: {counts.get(k, {}).get('n', 0):,} ({fmt_toman(counts.get(k, {}).get('amount', 0))})"
-                      for k, lbl in (("pending", "⏳ Pending"), ("completed", "✅ Completed"), ("failed", "❌ Failed")))
-    lines = ["↩️ <b>Refund Center</b>\n", head, "\nهر سفارش حداکثر یک بار برگشت می‌خورد (کلید یکتای سفارش).\n"]
+                      for k, lbl in (("pending", "⏳ در انتظار"), ("completed", "✅ انجام‌شده"), ("failed", "❌ ناموفق")))
+    lines = ["↩️ <b>مرکز برگشت پول</b>\n", head, "\nهر سفارش حداکثر یک بار برگشت می‌خورد (کلید یکتای سفارش).\n"]
     for r in rows:
         icon = {"pending": "⏳", "completed": "✅", "failed": "❌"}.get(r["status"], "•")
         lines.append(f"{icon} سفارش #{r['order_id']} 🆔{r['user_id']} {fmt_toman(r['amount'])} | "
@@ -223,17 +223,17 @@ async def refund_center(cb: CallbackQuery, callback_data: Fn, db: Database):
 @router.callback_query(Fn.filter(F.a == "failed"))
 async def failed_payments(cb: CallbackQuery, db: Database):
     rows = await finance.failed_payments(db)
-    lines = ["⚠️ <b>Failed Payments</b>\n",
-             "سفارش‌هایی که Stard رد کرد (پول کاربر برگشته) یا ارسالشان هنوز ناموفق است. Retry فقط برای کارهای dead "
-             "و با همان Idempotency-Key انجام می‌شود، پس هرگز دو بار خرید نمی‌شود.\n"]
+    lines = ["⚠️ <b>پرداخت‌های ناموفق</b>\n",
+             "سفارش‌هایی که Stard رد کرد (پول کاربر برگشته) یا ارسالشان هنوز ناموفق است. «تلاش دوباره» فقط برای کارهای متوقف‌شده "
+             "و با همان کلید یکتا انجام می‌شود، پس هرگز دو بار خرید نمی‌شود.\n"]
     b = InlineKeyboardBuilder()
     for o in rows:
         retry = "🔁 در صف تلاش دوباره" if o["status"] == "new" else ("☠️ dead" if o.get("dead_job") else "—")
         lines.append(f"#{o['id']} 🆔{o['user_id']} {escape(o['title'][:28])} | {fmt_toman(o['price'])}\n"
-                     f"   Reason/API Error: <code>{escape(o['failure_reason'] or '')}</code> | {o['updated_at'][:16]} | "
-                     f"Retry: {retry}")
+                     f"   علت/خطای API: <code>{escape(o['failure_reason'] or '')}</code> | {o['updated_at'][:16]} | "
+                     f"تلاش دوباره: {retry}")
         if o.get("dead_job"):
-            b.button(text=f"🔁 Retry #{o['id']}", callback_data=Op(a="qr", v=str(o["dead_job"])))
+            b.button(text=f"🔁 تلاش دوباره #{o['id']}", callback_data=Op(a="qr", v=str(o["dead_job"])))
     if not rows:
         lines.append("✅ موردی نیست.")
     b.adjust(2)
@@ -254,7 +254,7 @@ async def reports(cb: CallbackQuery, callback_data: Fn, state: FSMContext):
     b.adjust(3, 1, 3)
     custom = (await state.get_data()).get("rep_custom")
     await edit_or_send(cb.message, "📄 <b>گزارش مالی</b>\n\nبازه را انتخاب کنید و قالب را بزنید.\n"
-                                   "CSV: همه‌ی سفارش‌ها و تراکنش‌ها | Excel: خلاصه + سفارش‌ها + Ledger | PDF: خلاصه و روند روزانه"
+                                   "CSV: همه‌ی سفارش‌ها و تراکنش‌ها | اکسل: خلاصه + سفارش‌ها + دفتر کل | PDF: خلاصه و روند روزانه"
                                    + (f"\n\nبازه‌ی دلخواه ذخیره‌شده: {custom}" if custom else ""), back_to(MENU, b))
     await cb.answer()
 
@@ -321,8 +321,8 @@ async def fee_view(cb: CallbackQuery, db: Database):
     b.button(text="✏️ تنظیم کارمزدها", callback_data=Fn(a="fees"))
     b.adjust(2)
     await edit_or_send(cb.message, "🧮 <b>ماشین‌حساب کارمزد</b>\n\n"
-                                   f"Telegram Fee: {f['telegram_percent']}%\nAPI Fee: {f['api_percent']}%\n"
-                                   f"Payment Fee: {f['payment_percent']}% + {int(f['payment_fixed']):,} تومان ثابت\n\n"
+                                   f"کارمزد تلگرام: {f['telegram_percent']}%\nکارمزد API: {f['api_percent']}%\n"
+                                   f"کارمزد درگاه پرداخت: {f['payment_percent']}% + {int(f['payment_fixed']):,} تومان ثابت\n\n"
                                    "این کارمزدها در داشبورد سود و گزارش‌ها هم از سود خالص کم می‌شوند.", back_to(MENU, b))
     await cb.answer()
 
@@ -365,8 +365,8 @@ async def fee_calc(message: Message, state: FSMContext, db: Database):
     r = finance.fee_breakdown(sale, cost, await finance.fees(db), rr)
     await state.set_state(None)
     await message.answer(
-        f"🧮 <b>نتیجه</b>\n\nSale: {fmt_toman(r['sale'])}\nCost: {fmt_toman(r['cost'])}\n"
-        f"Telegram Fee: {fmt_toman(r['telegram'])}\nAPI Fee: {fmt_toman(r['api'])}\nPayment Fee: {fmt_toman(r['payment'])}\n"
-        f"Refund (ریسک {rr:g}%): {fmt_toman(r['refund'])}\n──────────\n<b>Net Profit: {fmt_toman(r['net'])}</b>\n"
-        f"Profit Margin: {r['margin']}%", reply_markup=main_menu(True))
+        f"🧮 <b>نتیجه</b>\n\nفروش: {fmt_toman(r['sale'])}\nهزینه: {fmt_toman(r['cost'])}\n"
+        f"کارمزد تلگرام: {fmt_toman(r['telegram'])}\nکارمزد API: {fmt_toman(r['api'])}\nکارمزد درگاه پرداخت: {fmt_toman(r['payment'])}\n"
+        f"برگشتی (ریسک {rr:g}%): {fmt_toman(r['refund'])}\n──────────\n<b>سود خالص: {fmt_toman(r['net'])}</b>\n"
+        f"حاشیه‌ی سود: {r['margin']}%", reply_markup=main_menu(True))
 

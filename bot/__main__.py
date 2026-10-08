@@ -22,7 +22,7 @@ from aiogram.exceptions import TelegramUnauthorizedError
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand
 
-from . import __version__, campaigns, monitor
+from . import __version__, campaigns, monitor, reports
 from .app import setup
 from .backups import BackupManager
 from .updater import Updater, finish_pending_update
@@ -37,7 +37,7 @@ from .worker import Context, JobWorker, Scheduler
 
 RESTART_EXIT_CODE = 3
 # این ماژول‌ها هنگام import کارهای دوره‌ای (هشدار، پشتیبان خودکار، اعلان‌های هوشمند) را ثبت می‌کنند
-PERIODIC_MODULES = (campaigns, monitor)
+PERIODIC_MODULES = (campaigns, monitor, reports)
 
 COMMANDS = [
     BotCommand(command="start", description="منوی اصلی"),

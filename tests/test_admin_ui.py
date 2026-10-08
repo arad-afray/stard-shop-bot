@@ -46,7 +46,7 @@ async def test_every_admin_page_renders(env):
     await send(dp, bot, ADMIN, "/start")
     await _orders(db)
     pages = [
-        Adm(name="home"), Op(a="menu"), Op(a="hc"), Op(a="res"), Op(a="logs"), Op(a="logl", v="ERROR"),
+        Adm(name="home"), Adm(name="help"), Adm(name="drep"), Adm(name="drep", arg="h+"), Adm(name="drep", arg="toggle"), Adm(name="drep", arg="now"), Op(a="menu"), Op(a="hc"), Op(a="res"), Op(a="logs"), Op(a="logl", v="ERROR"),
         Op(a="logs_svc", v="worker"), Op(a="logx"), Op(a="bk"), Op(a="bkc"), Op(a="upd"), Op(a="updlog"),
         Op(a="mig"), Op(a="diag"), Op(a="keys"), Op(a="wh"), Op(a="q"), Op(a="sec"), Op(a="dbs"), Op(a="deps"),
         Op(a="audit"), Op(a="al"), Op(a="alt", v="disk_high"), Op(a="maint"),
@@ -63,8 +63,8 @@ async def test_every_admin_page_renders(env):
         await click(dp, bot, ADMIN, p)
     docs = [m for m in session.sent if type(m).__name__ == "SendDocument"]
     assert len(docs) == 3  # CSV، Excel، PDF
-    assert any("COMMAND CENTER" in t for t in session.texts())
-    assert any("Health Check" in t for t in session.texts())
+    assert any("مرکز فرمان" in t for t in session.texts())
+    assert any("بررسی سلامت" in t for t in session.texts())
     assert any("v99.0.0" in t for t in session.texts())
     assert await db.audit_entries(action="flag_set") and await db.audit_entries(action="test_mode")
 
@@ -74,7 +74,7 @@ async def test_admin_forms(env):
     await send(dp, bot, ADMIN, "/start")
     await _orders(db)
     forms = [
-        (SA(a="flash"), "stars 10 6", "Flash Sale"),
+        (SA(a="flash"), "stars 10 6", "حراج"),
         (SA(a="rule+"), "Yalda -8 star_gift all now +2d", "ثبت شد"),
         (SA(a="rule+"), "bad input", "نادرست"),
         (SA(a="ctl+"), "stars stock 1000", "ذخیره شد"),
@@ -93,11 +93,11 @@ async def test_admin_forms(env):
         (Op(a="alth"), "disk_percent 85", "disk_percent"),
         (Op(a="mainttxt"), "به‌زودی برمی‌گردیم", "ذخیره شد"),
         (Op(a="keyc"), "grafana metrics:read", "sbk_"),
-        (Fn(a="lq"), f"user:{CUSTOMER} type:refund", "Ledger"),
+        (Fn(a="lq"), f"user:{CUSTOMER} type:refund", "دفتر کل"),
         (Fn(a="tx"), f"user:{CUSTOMER}", "نتیجه"),
         (Fn(a="repc"), "2026-10-01 2026-10-31", "بازه"),
         (Fn(a="fees"), "0 0 1.5 500", "ذخیره شد"),
-        (Fn(a="calc"), "2474000 2249000 1", "Net Profit"),
+        (Fn(a="calc"), "2474000 2249000 1", "سود خالص"),
     ]
     for cd, text, expect in forms:
         await click(dp, bot, ADMIN, cd)
@@ -107,8 +107,8 @@ async def test_admin_forms(env):
     # کارت کاربر با آمار کامل
     await click(dp, bot, ADMIN, Adm(name="ucard", arg=str(CUSTOMER)))
     card = session.texts()[-1]
-    for field in ("Total Orders", "Successful", "Failed", "Total Spent", "Total Profit", "Balance", "Referrals",
-                  "Last Activity", "Registration", "Gold"):
+    for field in ("کل سفارش‌ها", "موفق", "ناموفق", "کل خرید", "سود از این کاربر", "موجودی", "زیرمجموعه‌ها",
+                  "آخرین فعالیت", "تاریخ عضویت", "Gold"):
         assert field in card, field
     assert (await db.list_coupons(user_id=CUSTOMER))[0]["percent"] == 15
     assert any("پیشنهاد اختصاصی" in t for t in session.texts())   # کاربر خبردار شد
@@ -173,7 +173,7 @@ async def test_test_mode_purchase_for_admin(env):
     await db.credit(ADMIN, 10_000_000, "topup")
     await click(dp, bot, ADMIN, StarsQty(qty=100))
     await send(dp, bot, ADMIN, "@friend_one")
-    assert "Test Mode" in session.texts()[-1]
+    assert "آزمایشی" in session.texts()[-1]
     await click(dp, bot, ADMIN, Act(name="confirm"))
     o = (await db.recent_orders())[0]
     assert o["is_test"] == 1 and o["stard_ref"].startswith("ord_sim_") and fake.orders == {}
@@ -228,4 +228,4 @@ async def test_refund_center_and_order_refund_flow(env):
     r = await db.one("SELECT * FROM refunds WHERE order_id = :o", {"o": o["id"]})
     assert r["status"] == "completed"
     await click(dp, bot, ADMIN, Fn(a="ref"))
-    assert "Completed" in session.texts()[-1]
+    assert "انجام‌شده" in session.texts()[-1]
