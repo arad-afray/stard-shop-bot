@@ -275,14 +275,14 @@ class Updater:
                 raise UpdateError(f"مهاجرت ناموفق: {out[-300:]}")
             await progress("مهاجرت پایگاه داده", "ok", out.strip().splitlines()[-1] if out.strip() else "")
 
-            await progress("Health Check", "run")
+            await progress("بررسی سلامت", "run")
             rc, out = await self.run(sys.executable, "-m", "bot.selfcheck", cwd=self.root, timeout=300)
             if rc != 0:
                 raise UpdateError(f"Health Check کد جدید ناموفق: {out[-300:]}")
-            await progress("Health Check", "ok", out.strip().splitlines()[-1] if out.strip() else "")
+            await progress("بررسی سلامت", "ok", out.strip().splitlines()[-1] if out.strip() else "")
 
             self.state.status = "restarting"
-            await progress("Restart", "run", "ربات با نسخه‌ی جدید دوباره اجرا می‌شود…")
+            await progress("ری‌استارت", "run", "ربات با نسخه‌ی جدید دوباره اجرا می‌شود…")
             await self.db.set_json("update:pending", {"from_version": __version__, "to_version": release.latest,
                                                       "backup": b.name, "admin_id": admin_id, "at": now()})
             await self.db.audit(admin_id=admin_id, action="update_apply", ref=release.tag,
