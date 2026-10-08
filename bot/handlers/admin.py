@@ -15,7 +15,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, FSInputFile, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from .. import notify, reports
+from .. import group_prices as gp, notify, reports
 from ..admins import Admins
 from ..backups import BackupError, BackupManager
 from ..config import Settings
@@ -51,6 +51,8 @@ class AdminForm(StatesGroup):
     referral = State()
     add_admin = State()
     find_order = State()
+    group_words = State()
+    group_test = State()
 
 
 SETTINGS = {
@@ -782,22 +784,185 @@ async def ref_value(message: Message, state: FSMContext, db: Database):
 
 
 # ---------- قیمت در گروه ----------
+GP_COOLDOWNS = (0, 3, 10, 30, 60, 300)
+GP_DELETES = (0, 1, 5, 15, 60)
+GP_MODES = ("all", "allow", "deny")
+
+
+def _on(v: bool) -> str:
+    return "✅" if v else "⬜️"
+
+
+async def _group_page(db: Database) -> tuple[str, InlineKeyboardBuilder]:
+    from .prices import STATS
+    cfg = await gp.get_config(db)
+    known = await db.get_json("group_chats", {}) or {}
+    k = cfg["kinds"]
+    words = "، ".join(f"{gp.KIND_LABELS[x]}: {'، '.join(cfg['words'].get(x) or [])}" for x in gp.KINDS
+                     if cfg["words"].get(x)) or "—"
+    cd = int(cfg["cooldown"])
+    dl = int(cfg["delete_after"])
+    text = (
+        "💹 <b>جواب قیمت در گروه</b>\n\n"
+        f"وضعیت: {'🟢 روشن' if cfg['enabled'] else '🔴 خاموش'}\n\n"
+        "<b>به چه سؤال‌هایی جواب بدهد</b>\n"
+        + "\n".join(f"{_on(k.get(x, True))} {gp.KIND_LABELS[x]}" for x in (*gp.KINDS, "all")) + "\n"
+        f"{_on(cfg['bare_word'])} یک کلمه‌ی تنها (مثل «تون» یا «استارز؟»)\n"
+        f"{_on(cfg['amounts'])} سؤال با تعداد (مثل «10 تون»، «۵۰۰ استارز»، «100 دلار»)\n\n"
+        "<b>رفتار</b>\n"
+        f"{_on(cfg['buy_button'])} دکمه‌ی خرید زیر جواب\n"
+        f"{_on(cfg['inline'])} حالت اینلاین («@ربات 10 تون» در هر چتی؛ یک بار در @BotFather دستور /setinline)\n"
+        f"⏱ فاصله‌ی دو جواب یکسان در یک گروه: {cd} ثانیه\n"
+        f"🗑 پاک شدن خودکار جواب: {f'بعد از {dl} دقیقه' if dl else 'هرگز'}\n"
+        f"👥 گروه‌ها: {gp.MODE_LABELS[cfg['mode']]} ({len(known)} گروه شناخته‌شده)\n"
+        f"✏️ کلمه‌های اضافه: {escape(words)}\n\n"
+        f"📊 جواب‌ها از آخرین روشن شدن: دلار {STATS['usd']} | تون {STATS['ton']} | استارز {STATS['stars']} | "
+        f"همه {STATS['all']} | با تعداد {STATS['amount']} | اینلاین {STATS.get('inline', 0)}\n\n"
+        "⚠️ برای دیدن پیام‌های عادی گروه، در @BotFather گزینه‌ی "
+        "<b>Bot Settings → Group Privacy → Turn off</b> (تنظیمات ربات ← حریم گروه ← خاموش) را بزنید، "
+        "یا ربات را در گروه ادمین کنید."
+    )
+    b = InlineKeyboardBuilder()
+    b.button(text="🔴 خاموش کردن کل قابلیت" if cfg["enabled"] else "🟢 روشن کردن", callback_data=Adm(name="group", arg="t"))
+    for x in (*gp.KINDS, "all"):
+        b.button(text=f"{_on(k.get(x, True))} {gp.KIND_LABELS[x].split(' (')[0].split(' («')[0]}",
+                 callback_data=Adm(name="group", arg=f"k|{x}"))
+    b.button(text=f"{_on(cfg['bare_word'])} کلمه‌ی تنها", callback_data=Adm(name="group", arg="bare"))
+    b.button(text=f"{_on(cfg['amounts'])} با تعداد", callback_data=Adm(name="group", arg="amt"))
+    b.button(text=f"{_on(cfg['buy_button'])} دکمه‌ی خرید", callback_data=Adm(name="group", arg="buy"))
+    b.button(text=f"⏱ فاصله: {cd} ثانیه", callback_data=Adm(name="group", arg="cd"))
+    b.button(text=f"🗑 پاک شدن: {f'{dl} دقیقه' if dl else 'هرگز'}", callback_data=Adm(name="group", arg="del"))
+    b.button(text=f"{_on(cfg['inline'])} حالت اینلاین", callback_data=Adm(name="group", arg="inl"))
+    b.button(text="👥 انتخاب گروه‌ها", callback_data=Adm(name="grp_chats"))
+    b.button(text="✏️ کلمه‌های اضافه", callback_data=Adm(name="grp_words"))
+    b.button(text="🧪 امتحان یک پیام", callback_data=Adm(name="grp_test"))
+    b.adjust(1, 2, 2, 2, 2, 2, 2, 1)
+    return text, b
+
+
 @router.callback_query(Adm.filter(F.name == "group"))
 async def cb_group(cb: CallbackQuery, callback_data: Adm, db: Database):
-    if callback_data.arg == "t":
-        on = (await db.get_setting("group_prices", "1")) == "1"
-        await db.set_setting("group_prices", "0" if on else "1")
-    on = (await db.get_setting("group_prices", "1")) == "1"
-    b = InlineKeyboardBuilder()
-    b.button(text="🔴 خاموش کردن" if on else "🟢 روشن کردن", callback_data=Adm(name="group", arg="t"))
-    await edit_or_send(cb.message,
-                       f"💹 <b>جواب قیمت در گروه</b>\n\nوضعیت: {'🟢 روشن' if on else '🔴 خاموش'}\n\n"
-                       "ربات را به گروه اضافه کنید. با نوشتن «قیمت دلار»، «قیمت تون»، «قیمت استارز» یا «قیمت» "
-                       "(یا دستور /price) قیمت لحظه‌ای را جواب می‌دهد.\n\n"
-                       "⚠️ برای دیدن پیام‌های عادی گروه، در @BotFather گزینه‌ی "
-                       "<b>Bot Settings → Group Privacy → Turn off</b> (تنظیمات ربات ← حریم گروه ← خاموش) را بزنید، یا ربات را در گروه ادمین کنید.",
-                       back_admin(b))
+    arg = callback_data.arg
+    if arg:
+        cfg = await gp.get_config(db)
+        if arg == "t":
+            cfg["enabled"] = not cfg["enabled"]
+        elif arg.startswith("k|") and arg[2:] in (*gp.KINDS, "all"):
+            cfg["kinds"][arg[2:]] = not cfg["kinds"].get(arg[2:], True)
+        elif arg in ("bare", "amt", "buy", "inl"):
+            key = {"bare": "bare_word", "amt": "amounts", "buy": "buy_button", "inl": "inline"}[arg]
+            cfg[key] = not cfg[key]
+        elif arg == "cd":
+            cur = int(cfg["cooldown"])
+            cfg["cooldown"] = GP_COOLDOWNS[(GP_COOLDOWNS.index(cur) + 1) % len(GP_COOLDOWNS)] if cur in GP_COOLDOWNS else 3
+        elif arg == "del":
+            cur = int(cfg["delete_after"])
+            cfg["delete_after"] = GP_DELETES[(GP_DELETES.index(cur) + 1) % len(GP_DELETES)] if cur in GP_DELETES else 0
+        await gp.save_config(db, cfg)
+        await db.audit(admin_id=cb.from_user.id, action="group_prices.update", after={"arg": arg})
+    text, b = await _group_page(db)
+    await edit_or_send(cb.message, text, back_admin(b))
     await cb.answer()
+
+
+@router.callback_query(Adm.filter(F.name == "grp_chats"))
+async def cb_group_chats(cb: CallbackQuery, callback_data: Adm, db: Database):
+    cfg = await gp.get_config(db)
+    arg = callback_data.arg
+    if arg == "mode":
+        cfg["mode"] = GP_MODES[(GP_MODES.index(cfg["mode"]) + 1) % len(GP_MODES)]
+        await gp.save_config(db, cfg)
+    elif arg.lstrip("-").isdigit():
+        chats = set(cfg["chats"])
+        chats ^= {int(arg)}
+        cfg["chats"] = sorted(chats)
+        await gp.save_config(db, cfg)
+    known = await db.get_json("group_chats", {}) or {}
+    listed = set(cfg["chats"])
+    b = InlineKeyboardBuilder()
+    b.button(text=f"🔁 حالت: {gp.MODE_LABELS[cfg['mode']]}", callback_data=Adm(name="grp_chats", arg="mode"))
+    for cid, title in sorted(known.items(), key=lambda kv: kv[1])[:40]:
+        b.button(text=f"{_on(int(cid) in listed)} {title or cid}"[:40], callback_data=Adm(name="grp_chats", arg=cid))
+    b.button(text="⬅️ قیمت در گروه", callback_data=Adm(name="group"))
+    b.adjust(1)
+    hint = {"all": "ربات در همه‌ی گروه‌ها جواب می‌دهد؛ تیک‌ها اثری ندارند.",
+            "allow": "ربات فقط در گروه‌های تیک‌خورده ✅ جواب می‌دهد.",
+            "deny": "ربات در همه‌ی گروه‌ها جواب می‌دهد، به جز گروه‌های تیک‌خورده ✅."}[cfg["mode"]]
+    await edit_or_send(cb.message,
+                       f"👥 <b>انتخاب گروه‌ها</b>\n\n{hint}\n\n"
+                       + ("" if known else "هنوز گروهی ثبت نشده؛ ربات را به گروه اضافه کنید یا یک بار در گروه "
+                                          "«قیمت» بنویسید.\n")
+                       + "حالت را با دکمه‌ی بالا عوض کنید و روی هر گروه بزنید تا تیک بخورد.", b.as_markup())
+    await cb.answer()
+
+
+@router.callback_query(Adm.filter(F.name == "grp_words"))
+async def cb_group_words(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(AdminForm.group_words)
+    await cb.message.answer(
+        "✏️ کلمه‌های اضافه را هر کدام در یک خط بفرستید، مثلاً:\n"
+        "<code>تون: تنکوین، تون کوین</code>\n<code>استارز: استار تلگرام</code>\n<code>دلار: دلار آمریکا</code>\n\n"
+        "برای پاک کردن همه: <code>پاک</code>", reply_markup=cancel_menu())
+    await cb.answer()
+
+
+@router.message(AdminForm.group_words, F.text)
+async def group_words_value(message: Message, state: FSMContext, db: Database):
+    cfg = await gp.get_config(db)
+    names = {"دلار": "usd", "usd": "usd", "تون": "ton", "ton": "ton", "استارز": "stars", "stars": "stars"}
+    if message.text.strip() == "پاک":
+        cfg["words"] = {x: [] for x in gp.KINDS}
+    else:
+        words = {x: [] for x in gp.KINDS}
+        for line in message.text.splitlines():
+            if ":" not in line:
+                continue
+            head, rest = line.split(":", 1)
+            kind = names.get(head.strip().lower())
+            if not kind:
+                await message.answer(f"❗️ «{escape(head.strip())}» شناخته نشد؛ فقط دلار، تون یا استارز.")
+                return
+            words[kind] += [w.strip() for w in rest.replace("،", ",").split(",") if w.strip()][:20]
+        if not any(words.values()):
+            await message.answer("❗️ قالب نادرست است. مثال: <code>تون: تنکوین، تون کوین</code>")
+            return
+        cfg["words"] = words
+    await gp.save_config(db, cfg)
+    await state.clear()
+    await message.answer("✅ ذخیره شد.", reply_markup=main_menu(True))
+    text, b = await _group_page(db)
+    await message.answer(text, reply_markup=back_admin(b))
+
+
+@router.callback_query(Adm.filter(F.name == "grp_test"))
+async def cb_group_test(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(AdminForm.group_test)
+    await cb.message.answer("🧪 یک پیام همان‌طور که کاربرها در گروه می‌نویسند بفرستید (مثلاً «10 تون چنده؟»)؛ "
+                            "می‌بینید ربات چه جوابی می‌دهد.", reply_markup=cancel_menu())
+    await cb.answer()
+
+
+@router.message(AdminForm.group_test, F.text)
+async def group_test_value(message: Message, state: FSMContext, db: Database, shop: Shop):
+    from .prices import answer_for
+    cfg = await gp.get_config(db)
+    q = gp.parse(message.text, cfg)
+    if q is None:
+        await message.answer("🤐 ربات به این پیام <b>جواب نمی‌دهد</b> (گفتگوی عادی تشخیص داده شد).\n"
+                             "پیام دیگری بفرستید یا ❌ لغو.")
+        return
+    note = ""
+    if not cfg["enabled"]:
+        note = "\n⚠️ کل قابلیت خاموش است؛ الان در گروه جواب نمی‌دهد."
+    elif not gp.kind_enabled(cfg, q):
+        note = f"\n⚠️ جواب به {gp.KIND_LABELS[q.kind]} خاموش است؛ الان در گروه جواب نمی‌دهد."
+    try:
+        text, _ = await answer_for(shop, q)
+    except StardError as e:
+        text = f"⚠️ خطای API: {escape(e.code)}"
+    amount = f" | تعداد: {gp.fmt_num(q.amount, 4)}" if q.amount is not None else ""
+    await message.answer(f"✅ تشخیص: {gp.KIND_LABELS[q.kind]}{amount}{note}\n\n— جواب ربات —\n{text}\n\n"
+                         "پیام دیگری بفرستید یا ❌ لغو.")
 
 
 # ---------- کیف پول Stard ----------
@@ -911,6 +1076,8 @@ PANEL_HELP = (
     "حالت آزمایشی.\n"
     "📣 <b>بازاریابی</b>: پیام همگانی، کد تخفیف، پیشنهاد اختصاصی، پاداش روزانه و گردونه.\n"
     "🛠 <b>سیستم</b>: سلامت ربات، پشتیبان‌گیری، به‌روزرسانی، لاگ‌ها، صف کارها، هشدارها و گزارش رویدادها.\n"
+    "💹 <b>قیمت در گروه</b>: جواب خودکار به «قیمت»، «تون»، «10 تون»، «۵۰۰ استارز» در گروه‌ها و حالت اینلاین؛ "
+    "هر نوع سؤال جدا روشن/خاموش می‌شود.\n"
     "⚙️ <b>تنظیمات</b>: متن‌ها، کارت بانکی، کانال گزارش، عضویت اجباری و گزارش روزانه.\n"
     "🧹 <b>حالت تعمیر</b>: فروش را موقتاً متوقف می‌کند و به کاربران پیام «در حال تعمیر» نشان می‌دهد.\n"
     "🔴/🟢 <b>بستن/باز کردن فروشگاه</b>: فقط فروش را متوقف یا شروع می‌کند.\n\n"

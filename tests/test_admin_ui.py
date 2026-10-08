@@ -46,7 +46,7 @@ async def test_every_admin_page_renders(env):
     await send(dp, bot, ADMIN, "/start")
     await _orders(db)
     pages = [
-        Adm(name="home"), Adm(name="help"), Adm(name="drep"), Adm(name="drep", arg="h+"), Adm(name="drep", arg="toggle"), Adm(name="drep", arg="now"), Op(a="menu"), Op(a="hc"), Op(a="res"), Op(a="logs"), Op(a="logl", v="ERROR"),
+        Adm(name="home"), Adm(name="help"), Adm(name="group"), Adm(name="grp_chats"), Adm(name="grp_chats", arg="mode"), Adm(name="drep"), Adm(name="drep", arg="h+"), Adm(name="drep", arg="toggle"), Adm(name="drep", arg="now"), Op(a="menu"), Op(a="hc"), Op(a="res"), Op(a="logs"), Op(a="logl", v="ERROR"),
         Op(a="logs_svc", v="worker"), Op(a="logx"), Op(a="bk"), Op(a="bkc"), Op(a="upd"), Op(a="updlog"),
         Op(a="mig"), Op(a="diag"), Op(a="keys"), Op(a="wh"), Op(a="q"), Op(a="sec"), Op(a="dbs"), Op(a="deps"),
         Op(a="audit"), Op(a="al"), Op(a="alt", v="disk_high"), Op(a="maint"),

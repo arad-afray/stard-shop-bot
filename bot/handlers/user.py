@@ -5,7 +5,7 @@ import logging
 from html import escape
 
 from aiogram import Bot, F, Router
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -28,13 +28,21 @@ DEFAULT_WELCOME = ("به فروشگاه خوش آمدید!\n\n"
                    "اول کیف پول را شارژ کنید، بعد از بخش فروشگاه خرید کنید.")
 
 
-@router.message(CommandStart())
-async def start(message: Message, state: FSMContext, user: User, is_admin: bool, db: Database):
+@router.message(CommandStart(), F.chat.type == "private")
+async def start(message: Message, state: FSMContext, user: User, is_admin: bool, db: Database, shop: Shop,
+                command: CommandObject):
     await state.clear()
     name = escape(user.first_name or "دوست")
     welcome = await db.get_setting("welcome_text") or DEFAULT_WELCOME
     await message.answer(f"سلام {name} 👋\n{escape(welcome)}",
                          reply_markup=main_menu(is_admin))
+    # لینک خرید از جواب قیمت گروه: t.me/<bot>?start=stars_500
+    arg = command.args or ""
+    if arg.startswith("stars_") and arg[6:].isdigit():
+        from .shop import _start_offer
+        qty = int(arg[6:])
+        test = await shop.is_test_for(is_admin)
+        await _start_offer(message, state, shop, user, lambda: shop.stars_offer(qty, user=user, test=test))
 
 
 @router.callback_query(F.data == JOIN_CHECK)

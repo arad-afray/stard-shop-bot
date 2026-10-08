@@ -80,6 +80,7 @@ class Adm(CallbackData, prefix="adm"):
 
 class GPrice(CallbackData, prefix="gpr"):
     what: str                   # all | usd | ton | stars
+    amt: str = ""               # تعداد (برای «10 تون»)؛ خالی = قیمت واحد
 
 
 async def edit_or_send(message: Message, text: str, markup: InlineKeyboardMarkup | None = None) -> None:
@@ -304,6 +305,7 @@ def admin_menu(shop_open: bool, is_test: bool, is_owner: bool, *, maintenance: b
     b.button(text="💰 درصد سود", callback_data=Adm(name="profit"))
     b.button(text="🛍 مدیریت فروشگاه", callback_data=SA(a="menu"))
     b.button(text="📣 بازاریابی", callback_data=SA(a="mkt"))
+    b.button(text="💹 قیمت در گروه", callback_data=Adm(name="group"))
     b.button(text="🛠 سیستم", callback_data=Op(a="menu"))
     b.button(text="⚙️ تنظیمات", callback_data=Adm(name="settings"))
     b.button(text="📖 راهنمای پنل", callback_data=Adm(name="help"))
@@ -357,10 +359,14 @@ def back_admin(extra: InlineKeyboardBuilder | None = None) -> InlineKeyboardMark
     return b.as_markup()
 
 
-def price_group_menu(bot_username: str | None) -> InlineKeyboardMarkup:
+def price_group_menu(bot_username: str | None, what: str = "all", amt: str = "", *,
+                     buy_stars: int | None = None, buy_button: bool = True) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    b.button(text="🔄 به‌روزرسانی", callback_data=GPrice(what="all"))
-    if bot_username:
-        b.button(text="🛒 خرید از ربات", url=f"https://t.me/{bot_username}")
+    b.button(text="🔄 به‌روزرسانی", callback_data=GPrice(what=what, amt=amt))
+    if bot_username and buy_button:
+        if buy_stars:
+            b.button(text=f"🛒 خرید {buy_stars:,} استارز", url=f"https://t.me/{bot_username}?start=stars_{buy_stars}")
+        else:
+            b.button(text="🛒 خرید از ربات", url=f"https://t.me/{bot_username}")
     b.adjust(2)
     return b.as_markup()
