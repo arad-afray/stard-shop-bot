@@ -284,3 +284,20 @@ async def test_rate_limiter_db_and_redis(env):
     rr = RateLimiter(ctx.db, r)
     assert [await rr.hit("k", 2, 60) for _ in range(3)] == [True, True, False]
     await r.aclose()
+
+
+async def test_scheduler_first_tick_runs_even_right_after_boot(env, monkeypatch):
+    # روی سیستمی که تازه روشن شده monotonic کوچک است؛ کار ۲۴ ساعته نباید تا فردا عقب بیفتد
+    from types import SimpleNamespace
+
+    import bot.worker as w
+    ctx, *_ = env
+    runs = []
+
+    async def task(c):
+        runs.append(1)
+    monkeypatch.setattr(w, "time", SimpleNamespace(monotonic=lambda: 5.0))
+    s = Scheduler(ctx, [("daily", 86400, task)])
+    await s.tick()
+    await s.tick()
+    assert runs == [1]

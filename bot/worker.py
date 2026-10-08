@@ -365,7 +365,9 @@ class Scheduler:
 
     async def tick(self) -> None:
         for name, every, fn in self.tasks:
-            if time.monotonic() - self._last.get(name, 0) < every:
+            # اولین tick همیشه اجرا می‌شود (monotonic بعد از روشن شدن سیستم از صفر شروع می‌شود)
+            last = self._last.get(name)
+            if last is not None and time.monotonic() - last < every:
                 continue
             self._last[name] = time.monotonic()
             # فقط یک نمونه: قفل به اندازه‌ی فاصله‌ی اجرا (منهای کمی) نگه داشته می‌شود و آزاد نمی‌شود
