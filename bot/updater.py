@@ -21,6 +21,7 @@ import logging
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import zipfile
@@ -79,14 +80,21 @@ Runner = Callable[..., Awaitable[tuple[int, str]]]
 
 
 async def run_cmd(*args: str, cwd: str = ROOT, timeout: float = 900, env: dict | None = None) -> tuple[int, str]:
-    proc = await asyncio.create_subprocess_exec(*args, cwd=cwd, stdout=asyncio.subprocess.PIPE,
-                                                stderr=asyncio.subprocess.STDOUT, env=env)
-    try:
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout)
-    except asyncio.TimeoutError:
-        proc.kill()
-        return 124, "timeout"
-    return proc.returncode or 0, out.decode("utf-8", "replace")[-4000:]
+    """اجرای یک دستور (git، pip، python) در یک thread جدا.
+
+    asyncio.create_subprocess_exec روی ویندوز با WindowsSelectorEventLoop (که ربات استفاده می‌کند)
+    NotImplementedError می‌دهد؛ subprocess معمولی در thread روی همه‌ی سیستم‌عامل‌ها و همه‌ی event loopها کار می‌کند.
+    """
+    def _run() -> tuple[int, str]:
+        try:
+            p = subprocess.run(list(args), cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env,
+                               timeout=timeout, stdin=subprocess.DEVNULL)
+        except subprocess.TimeoutExpired:
+            return 124, "timeout"
+        except OSError as e:
+            return 127, f"{args[0]}: {type(e).__name__}: {e}"
+        return p.returncode or 0, (p.stdout or b"").decode("utf-8", "replace")[-4000:]
+    return await asyncio.to_thread(_run)
 
 
 def install_mode(root: str = ROOT) -> str:

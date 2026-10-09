@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import stat
 import sys
 import time
@@ -133,12 +134,15 @@ async def _pip_audit() -> list[Finding]:
     if exe is None:
         return [Finding("low", "بررسی آسیب‌پذیری وابستگی‌ها انجام نشد",
                         "pip-audit نصب نیست: python -m pip install pip-audit")]
+    def _run() -> bytes:
+        return subprocess.run([exe, "-r", os.path.join(ROOT, "requirements.txt"), "-f", "json"],
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                              timeout=180).stdout
     try:
-        proc = await asyncio.create_subprocess_exec(exe, "-r", os.path.join(ROOT, "requirements.txt"), "-f", "json",
-                                                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-        out, _ = await asyncio.wait_for(proc.communicate(), 180)
+        # در thread: روی ویندوز (WindowsSelectorEventLoop) زیرپردازه‌ی asyncio پشتیبانی نمی‌شود
+        out = await asyncio.to_thread(_run)
         data = json.loads(out or b"{}")
-    except (asyncio.TimeoutError, ValueError, OSError) as e:
+    except (subprocess.TimeoutExpired, ValueError, OSError) as e:
         return [Finding("low", "pip-audit اجرا نشد", type(e).__name__)]
     deps = data.get("dependencies", data if isinstance(data, list) else [])
     out_f = []

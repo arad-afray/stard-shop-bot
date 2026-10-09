@@ -415,3 +415,22 @@ async def test_archive_mode_update_validates_checksum_and_extracts(db, tmp_path,
     state = await up.apply(rel)
     assert state.status == "rolled_back" and "SHA-256" in state.error
     assert __version__ in (install / "bot" / "__init__.py").read_text()
+
+
+async def test_run_cmd_works_without_asyncio_subprocess(monkeypatch):
+    # روی ویندوز با WindowsSelectorEventLoop زیرپردازه‌ی asyncio پشتیبانی نمی‌شود (NotImplementedError)؛
+    # به‌روزرسانی از پنل نباید به آن وابسته باشد
+    import asyncio
+    import sys
+
+    from bot import updater
+
+    async def not_supported(*a, **kw):
+        raise NotImplementedError
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", not_supported)
+    rc, out = await updater.run_cmd(sys.executable, "-c", "print('ok')")
+    assert rc == 0 and out.strip() == "ok"
+    rc, out = await updater.run_cmd("definitely-not-a-command-xyz")
+    assert rc == 127
+    rc, out = await updater.run_cmd(sys.executable, "-c", "import time; time.sleep(5)", timeout=0.5)
+    assert rc == 124
